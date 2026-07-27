@@ -1,0 +1,548 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/am-requirement-spec-0.2.0.json",
+  "title": "Additive Manufacturing Requirement Specification",
+  "description": "自然语言增材制造工程需求的结构化输出格式。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "status",
+    "original_input",
+    "product",
+    "geometry",
+    "materials",
+    "boundary_conditions",
+    "performance_requirements",
+    "optimization",
+    "additive_manufacturing",
+    "assumptions",
+    "derived_constraints",
+    "missing_information",
+    "conflicts",
+    "clarification_questions",
+    "source_evidence",
+    "validation",
+    "approval"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.2.0"
+    },
+    "request_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "incomplete",
+        "conflict"
+      ]
+    },
+    "original_input": {
+      "$ref": "#/$defs/original_input"
+    },
+    "product": {
+      "type": "object",
+      "required": [
+        "name",
+        "functions",
+        "application_environment"
+      ],
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "functions": {
+          "type": "array"
+        },
+        "application_environment": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "geometry": {
+      "type": "object",
+      "required": [
+        "design_domain",
+        "preserved_regions",
+        "forbidden_regions",
+        "interfaces",
+        "symmetry",
+        "reference_frame"
+      ],
+      "properties": {
+        "design_domain": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/design_domain"
+            }
+          ]
+        },
+        "preserved_regions": {
+          "type": "array"
+        },
+        "forbidden_regions": {
+          "type": "array"
+        },
+        "interfaces": {
+          "type": "array"
+        },
+        "symmetry": {},
+        "reference_frame": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "materials": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/material"
+      }
+    },
+    "boundary_conditions": {
+      "type": "object",
+      "required": [
+        "fixed_regions",
+        "loads",
+        "thermal_conditions",
+        "contacts"
+      ],
+      "properties": {
+        "fixed_regions": {
+          "type": "array"
+        },
+        "loads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/load"
+          }
+        },
+        "thermal_conditions": {
+          "type": "array"
+        },
+        "contacts": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "performance_requirements": {
+      "type": "object"
+    },
+    "optimization": {
+      "type": "object",
+      "required": [
+        "objectives",
+        "hard_constraints",
+        "soft_preferences"
+      ],
+      "properties": {
+        "objectives": {
+          "type": "array"
+        },
+        "hard_constraints": {
+          "type": "array"
+        },
+        "soft_preferences": {
+          "type": "array"
+        }
+      },
+      "additionalProperties": false
+    },
+    "additive_manufacturing": {
+      "type": "object",
+      "required": [
+        "process",
+        "machine",
+        "build_direction",
+        "minimum_wall_thickness",
+        "minimum_feature_size",
+        "maximum_overhang",
+        "support_policy",
+        "material_removal"
+      ]
+    },
+    "assumptions": {
+      "type": "array"
+    },
+    "derived_constraints": {
+      "type": "array"
+    },
+    "missing_information": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/missing_information"
+      }
+    },
+    "conflicts": {
+      "type": "array"
+    },
+    "clarification_questions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/clarification_question"
+      }
+    },
+    "source_evidence": {
+      "type": "array"
+    },
+    "validation": {
+      "$ref": "#/$defs/validation"
+    },
+    "approval": {
+      "$ref": "#/$defs/approval"
+    }
+  },
+  "$defs": {
+    "original_input": {
+      "type": "object",
+      "required": [
+        "input_type",
+        "raw_text"
+      ],
+      "properties": {
+        "input_type": {
+          "enum": [
+            "text",
+            "voice_transcript"
+          ]
+        },
+        "raw_text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "material": {
+      "type": "object",
+      "required": [
+        "material_family",
+        "grade",
+        "properties",
+        "source_type",
+        "source_text",
+        "confirmation_status"
+      ],
+      "properties": {
+        "material_family": {
+          "type": "string"
+        },
+        "grade": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "properties": {
+          "type": "object"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "source_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confirmation_status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "load": {
+      "type": "object",
+      "required": [
+        "load_id",
+        "type",
+        "magnitude",
+        "unit",
+        "direction_text",
+        "direction_vector",
+        "reference_frame",
+        "application_region",
+        "source_type",
+        "source_text",
+        "confirmation_status"
+      ],
+      "properties": {
+        "load_id": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "force",
+            "pressure",
+            "torque",
+            "acceleration"
+          ]
+        },
+        "magnitude": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "unit": {
+          "type": "string"
+        },
+        "direction_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction_vector": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": {
+                "type": "number"
+              }
+            }
+          ]
+        },
+        "reference_frame": {
+          "type": "string"
+        },
+        "application_region": {},
+        "source_type": {
+          "type": "string"
+        },
+        "source_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confirmation_status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "missing_information": {
+      "type": "object",
+      "required": [
+        "code",
+        "field",
+        "message",
+        "priority"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "priority": {
+          "enum": [
+            "critical",
+            "important",
+            "optional"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "clarification_question": {
+      "type": "object",
+      "required": [
+        "question_id",
+        "based_on_code",
+        "field",
+        "question",
+        "priority",
+        "answer_type",
+        "status"
+      ],
+      "properties": {
+        "question_id": {
+          "type": "string",
+          "pattern": "^QUESTION-[0-9]{3}$"
+        },
+        "based_on_code": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "priority": {
+          "enum": [
+            "critical",
+            "important",
+            "optional"
+          ]
+        },
+        "answer_type": {
+          "enum": [
+            "text",
+            "quantity",
+            "direction",
+            "region",
+            "dimensions",
+            "single_choice",
+            "multiple_choice",
+            "boolean"
+          ]
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "answered",
+            "skipped"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "required": [
+        "schema_valid",
+        "unit_valid",
+        "engineering_complete",
+        "manufacturing_feasible",
+        "errors"
+      ],
+      "properties": {
+        "schema_valid": {
+          "type": "boolean"
+        },
+        "unit_valid": {
+          "type": "boolean"
+        },
+        "engineering_complete": {
+          "type": "boolean"
+        },
+        "manufacturing_feasible": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "approval": {
+      "type": "object",
+      "required": [
+        "engineer_confirmed",
+        "confirmed_by",
+        "confirmed_at"
+      ],
+      "properties": {
+        "engineer_confirmed": {
+          "type": "boolean"
+        },
+        "confirmed_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "confirmed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "normalized_length": {
+      "type": "object",
+      "required": [
+        "value",
+        "unit"
+      ],
+      "properties": {
+        "value": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "unit": {
+          "const": "mm"
+        }
+      },
+      "additionalProperties": false
+    },
+    "design_domain": {
+      "type": "object",
+      "required": [
+        "shape",
+        "dimensions",
+        "source_type",
+        "source_text",
+        "confirmation_status"
+      ],
+      "properties": {
+        "shape": {
+          "const": "rectangular_prism"
+        },
+        "dimensions": {
+          "type": "object",
+          "required": [
+            "length",
+            "width",
+            "height"
+          ],
+          "properties": {
+            "length": {
+              "$ref": "#/$defs/normalized_length"
+            },
+            "width": {
+              "$ref": "#/$defs/normalized_length"
+            },
+            "height": {
+              "$ref": "#/$defs/normalized_length"
+            }
+          },
+          "additionalProperties": false
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "source_text": {
+          "type": "string"
+        },
+        "confirmation_status": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

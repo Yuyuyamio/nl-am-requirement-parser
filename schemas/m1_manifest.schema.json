@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m1-manifest-0.1.0.json",
+  "title": "M1 Requirement Processing Manifest",
+  "description": "M1需求输入与语义解析模块向后续模块交付的流程清单。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "original_input",
+    "task_type",
+    "status",
+    "route_file",
+    "output_file",
+    "next_module"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M1"
+    },
+    "original_input": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_type": {
+      "enum": [
+        "creative_asset",
+        "engineering_part",
+        "unknown"
+      ]
+    },
+    "status": {
+      "enum": [
+        "ready",
+        "complete",
+        "incomplete",
+        "needs_clarification",
+        "conflict"
+      ]
+    },
+    "route_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "output_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "next_module": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "M2",
+        null
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "ready",
+              "complete"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_module": {
+            "const": "M2"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "incomplete",
+              "needs_clarification",
+              "conflict"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "next_module": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task_type": {
+            "const": "unknown"
+          }
+        },
+        "required": [
+          "task_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "const": "needs_clarification"
+          },
+          "next_module": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nl-am-requirement-parser"
+version = "0.1.0"
+description = "Prototype for parsing Chinese additive-manufacturing requirements into structured JSON."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "jsonschema>=4.23,<5",
+    "openai>=1.60,<3",
+]
+
+[project.scripts]
+am-requirement-parser = "am_requirement_parser.cli:main"
+am-requirement-dialog = "am_requirement_parser.interactive_cli:main"
+am-task-route = "am_requirement_parser.route_cli:main"
+am-creative-spec = "am_requirement_parser.creative_cli:main"
+am-m1 = "am_requirement_parser.main_cli:main"
+am-m1-verify = "am_requirement_parser.m1_verify:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
