@@ -41,16 +41,3 @@ requirement_spec.json
 $env:PYTHONPATH="src"
 python -m unittest discover -s tests -v
 ```
-
-## GitHub Desktop 上传
-
-1. 解压压缩包。
-2. 打开 GitHub Desktop。
-3. 点击 `File` → `Add local repository`。
-4. 选择解压后的文件夹。
-5. 若提示不是 Git 仓库，点击 `create a repository`。
-6. 首次提交信息填写 `Initial project scaffold`。
-7. 点击 `Commit to main`。
-8. 点击 `Publish repository`。
-
-当前版本只用于建立项目骨架和验证输入输出流程，暂时没有接入大语言模型。
