@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-normalization-receipt-0.1.0.json",
+  "title": "M2 Normalization Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "request_id",
+    "source_model_file",
+    "source_model_sha256",
+    "source_height_mm",
+    "target_height_mm",
+    "scale_factor",
+    "normalized_model_file",
+    "normalized_model_sha256",
+    "normalized_size_bytes",
+    "extents_before_mm",
+    "extents_after_mm",
+    "base_aligned_z0",
+    "status",
+    "library",
+    "library_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M2"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_model_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_model_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_height_mm": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "target_height_mm": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "scale_factor": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "normalized_model_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "normalized_model_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "normalized_size_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "extents_before_mm": {
+      "$ref": "#/$defs/extents"
+    },
+    "extents_after_mm": {
+      "$ref": "#/$defs/extents"
+    },
+    "base_aligned_z0": {
+      "type": "boolean"
+    },
+    "status": {
+      "const": "normalized"
+    },
+    "library": {
+      "const": "trimesh"
+    },
+    "library_version": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "extents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "properties": {
+        "x": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "y": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "z": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    }
+  }
+}

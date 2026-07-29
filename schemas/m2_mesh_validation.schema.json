@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-mesh-validation-0.1.0.json",
+  "title": "M2 Mesh Validation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "request_id",
+    "model_file",
+    "model_sha256",
+    "model_size_bytes",
+    "format",
+    "library",
+    "library_version",
+    "geometry_count",
+    "vertex_count",
+    "face_count",
+    "connected_components",
+    "watertight",
+    "winding_consistent",
+    "volume",
+    "extents_mm",
+    "target_height_mm",
+    "scale_factor_to_target_height",
+    "hard_checks",
+    "hard_constraints_passed",
+    "warnings",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M2"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "model_size_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "format": {
+      "const": "glb"
+    },
+    "library": {
+      "const": "trimesh"
+    },
+    "library_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "geometry_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "vertex_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "face_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "connected_components": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "watertight": {
+      "type": "boolean"
+    },
+    "winding_consistent": {
+      "type": "boolean"
+    },
+    "volume": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "extents_mm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "properties": {
+        "x": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "y": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "z": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "target_height_mm": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "exclusiveMinimum": 0
+    },
+    "scale_factor_to_target_height": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "exclusiveMinimum": 0
+    },
+    "hard_checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "has_geometry",
+        "triangular_faces",
+        "single_component",
+        "watertight",
+        "winding_consistent",
+        "positive_volume",
+        "nonzero_extents"
+      ],
+      "properties": {
+        "has_geometry": {
+          "type": "boolean"
+        },
+        "triangular_faces": {
+          "type": "boolean"
+        },
+        "single_component": {
+          "type": "boolean"
+        },
+        "watertight": {
+          "type": "boolean"
+        },
+        "winding_consistent": {
+          "type": "boolean"
+        },
+        "positive_volume": {
+          "type": "boolean"
+        },
+        "nonzero_extents": {
+          "type": "boolean"
+        }
+      }
+    },
+    "hard_constraints_passed": {
+      "type": "boolean"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

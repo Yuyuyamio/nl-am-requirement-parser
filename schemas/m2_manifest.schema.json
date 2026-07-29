@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-manifest-0.1.0.json",
+  "title": "M2 Model Generation Manifest",
+  "description": "Tracks M2 generation, validation, and handoff status.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "request_id",
+    "task_type",
+    "status",
+    "source_m1_manifest",
+    "source_spec",
+    "route_file",
+    "request_file",
+    "generator_route",
+    "provider",
+    "primary_model",
+    "validation_file",
+    "hard_constraints_passed",
+    "next_module"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M2"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_type": {
+      "enum": [
+        "creative_asset",
+        "engineering_part"
+      ]
+    },
+    "status": {
+      "enum": [
+        "planned",
+        "generation_pending",
+        "generating",
+        "generated",
+        "validating",
+        "complete",
+        "rejected",
+        "failed"
+      ]
+    },
+    "source_m1_manifest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_spec": {
+      "type": "string",
+      "minLength": 1
+    },
+    "route_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generator_route": {
+      "enum": [
+        "creative_mesh",
+        "parametric_cad"
+      ]
+    },
+    "provider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "primary_model": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validation_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hard_constraints_passed": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "next_module": {
+      "enum": [
+        "M3",
+        null
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "task_type": {
+            "const": "creative_asset"
+          }
+        },
+        "required": [
+          "task_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "generator_route": {
+            "const": "creative_mesh"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task_type": {
+            "const": "engineering_part"
+          }
+        },
+        "required": [
+          "task_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "generator_route": {
+            "const": "parametric_cad"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "planned"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "provider": {
+            "type": "null"
+          },
+          "primary_model": {
+            "type": "null"
+          },
+          "validation_file": {
+            "type": "null"
+          },
+          "hard_constraints_passed": {
+            "type": "null"
+          },
+          "next_module": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "complete"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "minLength": 1
+          },
+          "primary_model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "validation_file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "hard_constraints_passed": {
+            "const": true
+          },
+          "next_module": {
+            "const": "M3"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "next_module": {
+            "const": "M3"
+          }
+        },
+        "required": [
+          "next_module"
+        ]
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "const": "complete"
+          },
+          "hard_constraints_passed": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
+}

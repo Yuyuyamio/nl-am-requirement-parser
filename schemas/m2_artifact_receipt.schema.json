@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-artifact-receipt-0.1.0.json",
+  "title": "M2 Artifact Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "request_id",
+    "provider",
+    "provider_job_id",
+    "source_uri",
+    "local_file",
+    "media_type",
+    "sha256",
+    "size_bytes",
+    "status",
+    "provider_metadata"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M2"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "provider_job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_uri": {
+      "type": "string",
+      "minLength": 1
+    },
+    "local_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "media_type": {
+      "const": "model/gltf-binary"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "size_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "const": "available"
+    },
+    "provider_metadata": {
+      "type": "object"
+    }
+  }
+}

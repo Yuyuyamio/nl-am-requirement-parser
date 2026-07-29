@@ -58,6 +58,25 @@ DEFAULT_PRINTABILITY_GUIDANCE = [
     "avoid extremely thin fragile parts",
 ]
 
+CREATIVE_ASSET_FIELDS = {
+    "schema_version",
+    "task_type",
+    "intent_summary",
+    "object_name",
+    "category",
+    "visual_description",
+    "style",
+    "pose",
+    "target_height_mm",
+    "target_dimensions_text",
+    "output_target",
+    "generation_prompt_en",
+    "negative_prompt_en",
+    "system_printability_guidance",
+    "needs_clarification",
+    "clarification_question",
+    "confidence",
+}
 
 VALID_CATEGORIES = {
     "animal",
@@ -523,6 +542,25 @@ def _canonicalize_data(
         normalized = dict(data)
     else:
         normalized = {}
+        # 兼容模型常见的字段别名。
+        # 只有正式字段为空时，才使用别名内容。
+        if _clean_optional_string(
+            normalized.get("style")
+        ) is None:
+            normalized["style"] = (
+                normalized.get(
+                    "style_description"
+             )
+            )
+
+        if _clean_optional_string(
+            normalized.get("pose")
+        ) is None:
+            normalized["pose"] = (
+                normalized.get(
+                    "pose_description"
+                )
+            )
 
     normalized["schema_version"] = (
         "0.1.0"
@@ -772,7 +810,14 @@ def _canonicalize_data(
         )
     )
 
-    return normalized
+    return {
+        field_name: normalized.get(
+            field_name
+        )
+        for field_name in (
+            CREATIVE_ASSET_FIELDS
+        )
+    }
 
 
 def _collect_errors(

@@ -126,6 +126,71 @@ class CreativeSpecTests(unittest.TestCase):
             spec.needs_clarification
         )
 
+    def test_unknown_alias_fields_are_discarded(
+        self,
+    ) -> None:
+        result = valid_dog_spec()
+
+        result["style"] = None
+        result["pose"] = None
+
+        result["style_description"] = (
+            "Scary exaggerated proportions"
+        )
+
+        result["pose_description"] = (
+            "Standing upright and hunched"
+        )
+
+        result["unexpected_extra_field"] = (
+            "must not enter formal spec"
+        )
+
+        provider = SequenceProvider(
+            [result]
+        )
+
+        spec = build_creative_spec(
+            "给我打印一只超级大的恐怖老鼠，"
+            "高度20厘米",
+            provider,
+        )
+
+        spec_data = spec.to_dict()
+
+        self.assertEqual(
+            provider.call_count,
+            1,
+        )
+
+        self.assertIsNone(
+            spec.style
+        )
+
+        self.assertIsNone(
+            spec.pose
+        )
+
+        self.assertEqual(
+            spec.target_height_mm,
+            200.0,
+        )
+
+        self.assertNotIn(
+            "style_description",
+            spec_data,
+        )
+
+        self.assertNotIn(
+            "pose_description",
+            spec_data,
+        )
+
+        self.assertNotIn(
+            "unexpected_extra_field",
+            spec_data,
+        )
+
     def test_invalid_first_result_is_repaired(
         self,
     ) -> None:

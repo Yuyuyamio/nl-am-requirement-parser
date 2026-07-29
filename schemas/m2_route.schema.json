@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-route-0.1.0.json",
+  "title": "M2 Model Generation Route",
+  "description": "M2根据M1任务类型确定的三维模型生成路线。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "task_type",
+    "route",
+    "generator_family",
+    "preferred_provider",
+    "reason_code",
+    "ready_for_generation"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_type": {
+      "enum": [
+        "creative_asset",
+        "engineering_part"
+      ]
+    },
+    "route": {
+      "enum": [
+        "creative_mesh",
+        "parametric_cad"
+      ]
+    },
+    "generator_family": {
+      "enum": [
+        "generation_provider",
+        "cadquery"
+      ]
+    },
+    "preferred_provider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason_code": {
+      "enum": [
+        "CREATIVE_ASSET_ROUTE",
+        "ENGINEERING_PART_ROUTE"
+      ]
+    },
+    "ready_for_generation": {
+      "const": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "task_type": {
+            "const": "creative_asset"
+          }
+        },
+        "required": [
+          "task_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "route": {
+            "const": "creative_mesh"
+          },
+          "generator_family": {
+            "const": "generation_provider"
+          },
+          "preferred_provider": {
+            "type": "null"
+          },
+          "reason_code": {
+            "const": "CREATIVE_ASSET_ROUTE"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task_type": {
+            "const": "engineering_part"
+          }
+        },
+        "required": [
+          "task_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "route": {
+            "const": "parametric_cad"
+          },
+          "generator_family": {
+            "const": "cadquery"
+          },
+          "preferred_provider": {
+            "const": "cadquery"
+          },
+          "reason_code": {
+            "const": "ENGINEERING_PART_ROUTE"
+          }
+        }
+      }
+    }
+  ]
+}

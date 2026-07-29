@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-request-0.1.0.json",
+  "title": "M2 Model Generation Request",
+  "description": "M2即将交给具体生成器的标准化模型生成请求。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "request_id",
+    "task_type",
+    "source_m1_manifest",
+    "source_spec",
+    "source_payload_sha256",
+    "original_input",
+    "route",
+    "generator_family",
+    "preferred_provider",
+    "generation_status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M2"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task_type": {
+      "enum": [
+        "creative_asset",
+        "engineering_part"
+      ]
+    },
+    "source_m1_manifest": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_spec": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "original_input": {
+      "type": "string",
+      "minLength": 1
+    },
+    "route": {
+      "enum": [
+        "creative_mesh",
+        "parametric_cad"
+      ]
+    },
+    "generator_family": {
+      "enum": [
+        "generation_provider",
+        "cadquery"
+      ]
+    },
+    "preferred_provider": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generation_status": {
+      "const": "not_started"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "task_type": {
+            "const": "creative_asset"
+          }
+        },
+        "required": [
+          "task_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "route": {
+            "const": "creative_mesh"
+          },
+          "generator_family": {
+            "const": "generation_provider"
+          },
+          "preferred_provider": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "task_type": {
+            "const": "engineering_part"
+          }
+        },
+        "required": [
+          "task_type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "route": {
+            "const": "parametric_cad"
+          },
+          "generator_family": {
+            "const": "cadquery"
+          },
+          "preferred_provider": {
+            "const": "cadquery"
+          }
+        }
+      }
+    }
+  ]
+}

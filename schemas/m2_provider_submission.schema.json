@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-provider-submission-0.1.0.json",
+  "title": "M2 Provider Submission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "provider",
+    "request_id",
+    "idempotency_key",
+    "provider_job_id",
+    "status",
+    "reused_existing_submission",
+    "artifacts",
+    "provider_metadata"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^M2SUB-[0-9A-F]{20}$"
+    },
+    "provider_job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "submitted",
+        "completed",
+        "failed"
+      ]
+    },
+    "reused_existing_submission": {
+      "type": "boolean"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "provider_metadata": {
+      "type": "object"
+    }
+  }
+}

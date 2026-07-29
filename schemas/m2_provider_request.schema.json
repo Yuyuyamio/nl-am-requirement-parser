@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-provider-request-0.1.0.json",
+  "title": "M2 Provider Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "request_id",
+    "route",
+    "provider",
+    "idempotency_key",
+    "source_payload_sha256",
+    "prompt",
+    "negative_prompt",
+    "target_height_mm",
+    "metadata"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "route": {
+      "const": "creative_mesh"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1
+    },
+    "idempotency_key": {
+      "type": "string",
+      "pattern": "^M2SUB-[0-9A-F]{20}$"
+    },
+    "source_payload_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "negative_prompt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "target_height_mm": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "exclusiveMinimum": 0
+    },
+    "metadata": {
+      "type": "object"
+    }
+  }
+}
