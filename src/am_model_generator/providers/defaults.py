@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .meshy import MeshyProvider
 from .mock import MockProvider
+from .triposg_local import TripoSGLocalProvider
 from .registry import ProviderRegistry
 
 
@@ -16,6 +17,7 @@ def build_default_provider_registry(
     return ProviderRegistry(
         [
             MockProvider(),
+            TripoSGLocalProvider(),
             MeshyProvider(),
         ]
     )

@@ -5,6 +5,7 @@ from .base import (
     ProviderSubmissionStatus,
 )
 from .mock import MockProvider
+from .triposg_local import TripoSGLocalProvider
 from .registry import ProviderRegistry
 from .request_builder import (
     build_creative_generation_request,
@@ -21,6 +22,7 @@ __all__ = [
     "CreativeGenerationRequest",
     "GenerationProvider",
     "MockProvider",
+    "TripoSGLocalProvider",
     "ProviderRegistry",
     "ProviderSubmission",
     "ProviderSubmissionStatus",

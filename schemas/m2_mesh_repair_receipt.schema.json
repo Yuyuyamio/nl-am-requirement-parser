@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-mesh-repair-receipt-0.1.0.json",
+  "title": "M2 Mesh Repair Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "request_id",
+    "source_model_file",
+    "source_model_sha256",
+    "source_model_size_bytes",
+    "source_validation_file",
+    "source_validation_sha256",
+    "repaired_model_file",
+    "repaired_model_sha256",
+    "repaired_size_bytes",
+    "method",
+    "parameters",
+    "source_stats",
+    "surface_attempt",
+    "method_metadata",
+    "repaired_stats",
+    "source_unchanged",
+    "status",
+    "library",
+    "library_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M2"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_model_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_model_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_model_size_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_validation_file": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_validation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "repaired_model_file": {
+      "const": "repaired_model.glb"
+    },
+    "repaired_model_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "repaired_size_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "method": {
+      "enum": [
+        "surface_repair",
+        "voxel_remesh"
+      ]
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "voxel_resolution"
+      ],
+      "properties": {
+        "voxel_resolution": {
+          "type": "integer",
+          "minimum": 32,
+          "maximum": 256
+        }
+      }
+    },
+    "source_stats": {
+      "$ref": "#/$defs/meshStats"
+    },
+    "surface_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metadata",
+        "stats"
+      ],
+      "properties": {
+        "metadata": {
+          "type": "object"
+        },
+        "stats": {
+          "$ref": "#/$defs/meshStats"
+        }
+      }
+    },
+    "method_metadata": {
+      "type": "object"
+    },
+    "repaired_stats": {
+      "$ref": "#/$defs/meshStats"
+    },
+    "source_unchanged": {
+      "const": true
+    },
+    "status": {
+      "const": "repaired"
+    },
+    "library": {
+      "const": "trimesh"
+    },
+    "library_version": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "meshStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "geometry_count",
+        "vertex_count",
+        "face_count",
+        "connected_components",
+        "watertight",
+        "winding_consistent",
+        "broken_face_count",
+        "volume",
+        "extents",
+        "bounds"
+      ],
+      "properties": {
+        "geometry_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "vertex_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "face_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "connected_components": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "watertight": {
+          "type": "boolean"
+        },
+        "winding_consistent": {
+          "type": "boolean"
+        },
+        "broken_face_count": {
+          "type": "integer",
+          "minimum": -1
+        },
+        "volume": {
+          "type": "number"
+        },
+        "extents": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        },
+        "bounds": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  }
+}

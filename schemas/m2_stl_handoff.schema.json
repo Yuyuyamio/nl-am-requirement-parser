@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/m2-stl-handoff-0.1.0.json",
+  "title": "M2 STL-Only Handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "module",
+    "request_id",
+    "status",
+    "m3_model_file",
+    "m3_model_format",
+    "m3_model_media_type",
+    "m3_coordinate_unit",
+    "source_model_file",
+    "source_model_sha256",
+    "source_model_size_bytes",
+    "source_validation_file",
+    "stl_validation_file",
+    "stl_sha256",
+    "stl_size_bytes",
+    "target_height_mm",
+    "manufacturing_transform",
+    "source_checks",
+    "stl_checks",
+    "source_unchanged",
+    "geometry_handoff_only",
+    "m3_pending_work",
+    "next_module",
+    "library",
+    "library_version"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "0.1.0"
+    },
+    "module": {
+      "const": "M2"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "const": "ready_for_M3"
+    },
+    "m3_model_file": {
+      "const": "m2_output.stl"
+    },
+    "m3_model_format": {
+      "const": "stl"
+    },
+    "m3_model_media_type": {
+      "const": "model/stl"
+    },
+    "m3_coordinate_unit": {
+      "const": "millimeter"
+    },
+    "source_model_file": {
+      "const": "normalized_model.glb"
+    },
+    "source_model_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_model_size_bytes": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "source_validation_file": {
+      "const": "normalized_mesh_validation.json"
+    },
+    "stl_validation_file": {
+      "const": "stl_validation.json"
+    },
+    "stl_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "stl_size_bytes": {
+      "type": "integer",
+      "minimum": 84
+    },
+    "target_height_mm": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "manufacturing_transform": {
+      "type": "object"
+    },
+    "source_checks": {
+      "type": "object"
+    },
+    "stl_checks": {
+      "type": "object"
+    },
+    "source_unchanged": {
+      "const": true
+    },
+    "geometry_handoff_only": {
+      "const": true
+    },
+    "m3_pending_work": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "next_module": {
+      "const": "M3"
+    },
+    "library": {
+      "const": "trimesh"
+    },
+    "library_version": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

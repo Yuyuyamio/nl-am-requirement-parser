@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import argparse
+import json
+from collections.abc import Sequence
+
+from am_model_generator.contracts import (
+    M2InputError,
+)
+from am_model_generator.stl_handoff import (
+    create_m2_stl_handoff,
+)
+
+
+def main(
+    argv: Sequence[str] | None = None,
+) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Export the verified normalized M2 "
+            "model as the only STL geometry "
+            "handoff for M3."
+        )
+    )
+
+    parser.add_argument(
+        "task_directory",
+    )
+
+    args = parser.parse_args(argv)
+
+    try:
+        handoff = create_m2_stl_handoff(
+            args.task_directory
+        )
+
+        result = {
+            "schema_version": "0.1.0",
+            "module": "M2_GATE9_STL",
+            "status": (
+                "M2_STL_ONLY_HANDOFF_PASS"
+            ),
+            "handoff": handoff,
+        }
+        return_code = 0
+
+    except M2InputError as error:
+        result = {
+            "schema_version": "0.1.0",
+            "module": "M2_GATE9_STL",
+            "status": "failed",
+            "error": error.to_dict(),
+        }
+        return_code = 1
+
+    except Exception as error:
+        result = {
+            "schema_version": "0.1.0",
+            "module": "M2_GATE9_STL",
+            "status": "failed",
+            "error": {
+                "error_type": (
+                    type(error).__name__
+                ),
+                "message": str(error),
+            },
+        }
+        return_code = 1
+
+    print(
+        json.dumps(
+            result,
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+    return return_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
