@@ -32,3 +32,8 @@ m1_manifest.json
 # Temporary and backup files
 test_errors.txt
 *.bak
+.m2_local_cache/
+.gate*_backup/
+.quarantine/
+.quarantine*/
+reference_outputs/

@@ -11,6 +11,9 @@ requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.23,<5",
     "openai>=1.60,<3",
+    "numpy>=1.26,<3",
+    "trimesh>=4.4,<5",
+    "scikit-image>=0.24,<1",
 ]
 
 [project.scripts]
