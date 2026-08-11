@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1.0",
+  "sequences": [
+    {
+      "name": "normal_sequence_001",
+      "expected": "success",
+      "frames": [
+        "REPLACE_WITH_FRAME_1.jpg",
+        "REPLACE_WITH_FRAME_2.jpg",
+        "REPLACE_WITH_FRAME_3.jpg"
+      ]
+    },
+    {
+      "name": "failure_sequence_001",
+      "expected": "failure",
+      "frames": [
+        "REPLACE_WITH_FAILURE_FRAME_1.jpg",
+        "REPLACE_WITH_FAILURE_FRAME_2.jpg",
+        "REPLACE_WITH_FAILURE_FRAME_3.jpg"
+      ]
+    }
+  ]
+}
