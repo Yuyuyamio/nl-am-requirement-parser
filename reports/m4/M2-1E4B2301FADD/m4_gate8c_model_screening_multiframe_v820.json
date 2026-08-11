@@ -1,0 +1,673 @@
+{
+  "schema_version": "0.1.0",
+  "module": "M4",
+  "phase": "8C",
+  "version": "8.2.0",
+  "stage": "real_ai_labeled_screening_and_multiframe_replay",
+  "request_id": "M2-1E4B2301FADD",
+  "device_id": "00M09A3A1700722",
+  "status": "real_ai_screening_completed",
+  "created_unix": 1786353530.6036544,
+  "source_gate8b": {
+    "report_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\outputs\\m4\\M2-1E4B2301FADD\\m4_gate8b_real_ai_inference_v810.json",
+    "version": "8.1.0",
+    "status": "real_local_ai_inference_validated"
+  },
+  "ai_backend": {
+    "name": "PrintGuard",
+    "base_url": "http://127.0.0.1:8000",
+    "health": {
+      "ok": true,
+      "version": "2.3.11"
+    },
+    "capability": "generic_fdm_failure_binary"
+  },
+  "labeled_dataset": {
+    "success_directory": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success",
+    "failure_directory": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure",
+    "success_results": [
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_001.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.542340636253357,
+          "failure": 1.212294578552246
+        },
+        "margin": 0.33004605770111084,
+        "defect_score": 0.5412557572126389
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_002.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.3003582954406738,
+          "failure": 1.0631799697875977
+        },
+        "margin": 0.23717832565307617,
+        "defect_score": 0.5296472907066345
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_003.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.504280686378479,
+          "failure": 1.1043239831924438
+        },
+        "margin": 0.39995670318603516,
+        "defect_score": 0.5499945878982544
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_004.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.1903491020202637,
+          "failure": 1.1177111864089966
+        },
+        "margin": 0.07263791561126709,
+        "defect_score": 0.5090797394514084
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_005.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 1.0866762399673462,
+          "failure": 1.1148813962936401
+        },
+        "margin": 0.028205156326293945,
+        "defect_score": 0.49647435545921326
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_006.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.9097620248794556,
+          "failure": 1.2512534856796265
+        },
+        "margin": 0.6585085391998291,
+        "defect_score": 0.5823135673999786
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_007.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.5452991724014282,
+          "failure": 1.1866776943206787
+        },
+        "margin": 0.3586214780807495,
+        "defect_score": 0.5448276847600937
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_008.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.727134108543396,
+          "failure": 1.1346302032470703
+        },
+        "margin": 0.5925039052963257,
+        "defect_score": 0.5740629881620407
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_009.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.565499186515808,
+          "failure": 1.0259273052215576
+        },
+        "margin": 0.5395718812942505,
+        "defect_score": 0.5674464851617813
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_010.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.4779125452041626,
+          "failure": 1.0532517433166504
+        },
+        "margin": 0.4246608018875122,
+        "defect_score": 0.553082600235939
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_011.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.8443219661712646,
+          "failure": 1.1762670278549194
+        },
+        "margin": 0.6680549383163452,
+        "defect_score": 0.5835068672895432
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_012.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 2.328497886657715,
+          "failure": 1.507652759552002
+        },
+        "margin": 0.8208451271057129,
+        "defect_score": 0.6026056408882141
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_013.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.5249416828155518,
+          "failure": 1.045203447341919
+        },
+        "margin": 0.4797382354736328,
+        "defect_score": 0.5599672794342041
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_014.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.7279911041259766,
+          "failure": 1.1427403688430786
+        },
+        "margin": 0.585250735282898,
+        "defect_score": 0.5731563419103622
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_015.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.2884255647659302,
+          "failure": 1.0361876487731934
+        },
+        "margin": 0.2522379159927368,
+        "defect_score": 0.5315297394990921
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_016.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.3714168071746826,
+          "failure": 1.077026605606079
+        },
+        "margin": 0.2943902015686035,
+        "defect_score": 0.5367987751960754
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_017.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.6888107061386108,
+          "failure": 1.1453237533569336
+        },
+        "margin": 0.5434869527816772,
+        "defect_score": 0.5679358690977097
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_018.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.3615515232086182,
+          "failure": 1.1162359714508057
+        },
+        "margin": 0.2453155517578125,
+        "defect_score": 0.5306644439697266
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_019.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.7659114599227905,
+          "failure": 1.0997523069381714
+        },
+        "margin": 0.6661591529846191,
+        "defect_score": 0.5832698941230774
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_020.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.6014418005943298,
+          "failure": 1.3377056121826172
+        },
+        "margin": 0.7362638115882874,
+        "defect_score": 0.4079670235514641
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_021.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.8959611058235168,
+          "failure": 1.2060726881027222
+        },
+        "margin": 0.3101115822792053,
+        "defect_score": 0.46123605221509933
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_022.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 2.4811015129089355,
+          "failure": 1.4955474138259888
+        },
+        "margin": 0.9855540990829468,
+        "defect_score": 0.6231942623853683
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_023.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.520551085472107,
+          "failure": 0.9605818390846252
+        },
+        "margin": 0.5599692463874817,
+        "defect_score": 0.5699961557984352
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_024.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.9714515209197998,
+          "failure": 1.1940350532531738
+        },
+        "margin": 0.22258353233337402,
+        "defect_score": 0.47217705845832825
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_025.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.6741174459457397,
+          "failure": 1.3776657581329346
+        },
+        "margin": 0.7035483121871948,
+        "defect_score": 0.41205646097660065
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_026.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.9610640406608582,
+          "failure": 1.1372175216674805
+        },
+        "margin": 0.17615348100662231,
+        "defect_score": 0.4779808148741722
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_027.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.1149147748947144,
+          "failure": 1.0468333959579468
+        },
+        "margin": 0.06808137893676758,
+        "defect_score": 0.508510172367096
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_028.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 2.200136184692383,
+          "failure": 1.3646405935287476
+        },
+        "margin": 0.8354955911636353,
+        "defect_score": 0.6044369488954544
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_029.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.4525249004364014,
+          "failure": 1.018820881843567
+        },
+        "margin": 0.4337040185928345,
+        "defect_score": 0.5542130023241043
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\success\\success_030.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.1818095445632935,
+          "failure": 1.1162570714950562
+        },
+        "margin": 0.0655524730682373,
+        "defect_score": 0.5081940591335297
+      }
+    ],
+    "failure_results": [
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_001.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.5645419359207153,
+          "failure": 1.1334397792816162
+        },
+        "margin": 0.4311021566390991,
+        "defect_score": 0.5538877695798874
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_002.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.8422147035598755,
+          "failure": 1.2065024375915527
+        },
+        "margin": 0.36428773403167725,
+        "defect_score": 0.45446403324604034
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_003.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.6473673582077026,
+          "failure": 1.124784231185913
+        },
+        "margin": 0.5225831270217896,
+        "defect_score": 0.5653228908777237
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_004.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.1144436597824097,
+          "failure": 1.0708889961242676
+        },
+        "margin": 0.04355466365814209,
+        "defect_score": 0.5054443329572678
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_005.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.429286241531372,
+          "failure": 1.024516224861145
+        },
+        "margin": 0.40477001667022705,
+        "defect_score": 0.5505962520837784
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_006.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 2.0037920475006104,
+          "failure": 1.2192214727401733
+        },
+        "margin": 0.784570574760437,
+        "defect_score": 0.5980713218450546
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_007.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.8304384350776672,
+          "failure": 1.222070574760437
+        },
+        "margin": 0.3916321396827698,
+        "defect_score": 0.4510459825396538
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_008.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.41042959690094,
+          "failure": 1.144141674041748
+        },
+        "margin": 0.2662879228591919,
+        "defect_score": 0.533285990357399
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_009.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.1262028217315674,
+          "failure": 1.1095563173294067
+        },
+        "margin": 0.016646504402160645,
+        "defect_score": 0.5020808130502701
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_010.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.2470531463623047,
+          "failure": 1.123948335647583
+        },
+        "margin": 0.12310481071472168,
+        "defect_score": 0.5153881013393402
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_011.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.9357290267944336,
+          "failure": 1.1700133085250854
+        },
+        "margin": 0.7657157182693481,
+        "defect_score": 0.5957144647836685
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_012.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 2.2200846672058105,
+          "failure": 1.325777530670166
+        },
+        "margin": 0.8943071365356445,
+        "defect_score": 0.6117883920669556
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_013.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.6095606088638306,
+          "failure": 1.0575534105300903
+        },
+        "margin": 0.5520071983337402,
+        "defect_score": 0.5690008997917175
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_014.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.4141677618026733,
+          "failure": 1.0078426599502563
+        },
+        "margin": 0.406325101852417,
+        "defect_score": 0.5507906377315521
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_015.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.349571704864502,
+          "failure": 1.096394658088684
+        },
+        "margin": 0.25317704677581787,
+        "defect_score": 0.5316471308469772
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_016.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.8305087685585022,
+          "failure": 1.2853658199310303
+        },
+        "margin": 0.4548570513725281,
+        "defect_score": 0.443142868578434
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_017.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.8853741884231567,
+          "failure": 1.1834454536437988
+        },
+        "margin": 0.7019287347793579,
+        "defect_score": 0.5877410918474197
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_018.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.665246605873108,
+          "failure": 1.0697929859161377
+        },
+        "margin": 0.5954536199569702,
+        "defect_score": 0.5744317024946213
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_019.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 1.1375877857208252,
+          "failure": 1.159724235534668
+        },
+        "margin": 0.022136449813842773,
+        "defect_score": 0.49723294377326965
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_020.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.158318042755127,
+          "failure": 1.0379399061203003
+        },
+        "margin": 0.12037813663482666,
+        "defect_score": 0.5150472670793533
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_021.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.5799387693405151,
+          "failure": 1.4384891986846924
+        },
+        "margin": 0.8585504293441772,
+        "defect_score": 0.39268119633197784
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_022.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.7558953762054443,
+          "failure": 1.2497097253799438
+        },
+        "margin": 0.4938143491744995,
+        "defect_score": 0.43827320635318756
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_023.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.5314627885818481,
+          "failure": 1.09102463722229
+        },
+        "margin": 0.4404381513595581,
+        "defect_score": 0.5550547689199448
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_024.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.2568988800048828,
+          "failure": 1.0994858741760254
+        },
+        "margin": 0.15741300582885742,
+        "defect_score": 0.5196766257286072
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_025.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.268811821937561,
+          "failure": 1.0777028799057007
+        },
+        "margin": 0.19110894203186035,
+        "defect_score": 0.5238886177539825
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_026.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.18601655960083,
+          "failure": 1.1122158765792847
+        },
+        "margin": 0.07380068302154541,
+        "defect_score": 0.5092250853776932
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_027.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.9930362701416016,
+          "failure": 1.247239112854004
+        },
+        "margin": 0.7457971572875977,
+        "defect_score": 0.5932246446609497
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_028.jpg",
+        "prediction": "success",
+        "distances": {
+          "success": 0.6024958491325378,
+          "failure": 1.4820572137832642
+        },
+        "margin": 0.8795613646507263,
+        "defect_score": 0.3900548294186592
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_029.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.381986379623413,
+          "failure": 1.1233667135238647
+        },
+        "margin": 0.25861966609954834,
+        "defect_score": 0.5323274582624435
+      },
+      {
+        "image_file": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\gate8c_dataset\\failure\\failure_030.jpg",
+        "prediction": "failure",
+        "distances": {
+          "success": 1.880325198173523,
+          "failure": 1.1577723026275635
+        },
+        "margin": 0.7225528955459595,
+        "defect_score": 0.5903191119432449
+      }
+    ]
+  },
+  "model_screening_metrics": {
+    "counts": {
+      "true_success_pred_success": 6,
+      "true_success_pred_failure": 24,
+      "true_success_pred_unknown": 0,
+      "true_failure_pred_success": 7,
+      "true_failure_pred_failure": 23,
+      "true_failure_pred_unknown": 0
+    },
+    "success_sample_count": 30,
+    "failure_sample_count": 30,
+    "total_sample_count": 60,
+    "success_recall": 0.2,
+    "failure_recall": 0.7666666666666667,
+    "overall_accuracy_unknown_counted_wrong": 0.48333333333333334,
+    "balanced_accuracy_unknown_counted_wrong": 0.4833333333333334,
+    "unknown_rate": 0.0,
+    "quality_interpretation": "METRICS_ONLY_NO_PRODUCTION_ACCEPTANCE_CLAIM"
+  },
+  "multiframe_replay": null,
+  "model_quality_status": "NOT_ACCEPTED_YET_REVIEW_METRICS",
+  "model_quality_policy": {
+    "automatic_accuracy_pass_fail_threshold_used": false,
+    "reason": "No production acceptance threshold has been established for this project. Gate8C reports real labeled metrics without inventing a pass criterion.",
+    "failure_recall_is_high_priority": true,
+    "single_failure_sample_is_not_sufficient": true
+  },
+  "policy": {
+    "office_only": true,
+    "printer_connection_attempted": false,
+    "x1c_camera_connection_attempted": false,
+    "mqtt_publish_count": 0,
+    "ftps_connection_attempted": false,
+    "printer_control_count": 0,
+    "model_accuracy_claimed": false,
+    "real_labeled_inference_performed": true,
+    "gcode_file_modified": false,
+    "bambu_profile_modified": false
+  },
+  "next_phase": "review_gate8c_metrics_then_freeze_model_or_replace_model"
+}
