@@ -124,3 +124,31 @@ Gate 8F-A should first determine:
 - Do not enable automatic pause/stop.
 - Do not mutate G-code directly.
 - Do not auto-apply Bambu profile patches.
+
+## 2026-08-12 — X1C Developer Mode bicolor acceptance
+
+Status: **PASS**
+
+Final validated path:
+
+`pre-sliced X1C .gcode.3mf -> Developer Mode backend -> AMS selection -> gray print -> automatic gray-to-yellow change -> continued print -> FINISH`
+
+Key results:
+
+- V11.2.0 rebuilt the raw X1C `project_file` AMS mapping at the backend layer.
+- Logical filament mapping: gray -> AMS slot 1 / tray 0; yellow -> AMS slot 4 / tray 3.
+- X1C wire mapping: `[0, 3, -1, -1, -1]`.
+- `ams_mapping` is a real JSON array, not a nested JSON string.
+- X1C path omits H2-style `ams_mapping2` and `ams_mapping_info`.
+- Offline wire dry-run: `V1120_WIRE_DRYRUN=PASS`.
+- Full real bicolor print: `M4_X1C_FIRST_COLOR_CHANGE_V1121=PASS`.
+- First gray -> yellow AMS change completed successfully.
+- The full print completed successfully without manual Bambu Studio GUI operation.
+
+Evidence committed with this update:
+
+- `reports/m4/M2-1E4B2301FADD/m4_x1c_wire_mapping_v1120.json`
+- `reports/m4/M2-1E4B2301FADD/m4_developer_backend_final_acceptance_v1120.json`
+- `reports/m4/M2-1E4B2301FADD/m4_developer_backend_final_live_events_v1120.jsonl`
+
+Boundary: automatic runtime parameter adjustment triggered by X1C Native AI is still **not validated** and must not be claimed as complete.

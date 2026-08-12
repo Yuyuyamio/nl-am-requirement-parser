@@ -1,0 +1,86 @@
+# M4 X1C Developer Mode 双色打印成功报告
+
+## 1. 任务概述
+
+- 项目：物质创制——自然语言驱动的智能化增材制造 3D 打印与自优化
+- 模块：M4 多材料协同打印
+- 打印机：Bambu Lab X1C
+- Device ID：`00M09A3A1700722`
+- 打印机 IP：`172.16.61.6`
+- 打印方式：Developer Mode
+- Bambu Studio GUI：未使用
+- 请求 ID：`M2-1E4B2301FADD`
+- 本次验收结果：**PASS**
+
+## 2. 本次核心目标
+
+验证 X1C Developer Mode 下的双色打印主链路，重点确认 AMS 物理槽位映射和第一次真实灰色到黄色自动换料。
+
+## 3. AMS 映射
+
+- 逻辑耗材 0：灰色 PLA
+- 逻辑耗材 1：黄色 PLA
+- 灰色 PLA -> AMS 物理槽 1 -> tray 0
+- 黄色 PLA -> AMS 物理槽 4 -> tray 3
+- CLI 映射：`0,3`
+- X1C raw wire 映射：`0,3,-1,-1,-1`
+- `use_ams = true`
+- `ams_mapping2`：未发送
+- `ams_mapping_info`：未发送
+
+## 4. 关键修复
+
+此前双色打印在第一次换色阶段出现 AMS 映射表获取失败。
+
+V11.2.0 将底层 `project_file` 中的 AMS 映射修正为 X1C raw MQTT 使用的真实 JSON 数组：
+
+`[0, 3, -1, -1, -1]`
+
+并取消对 X1C 不需要的 `ams_mapping2` 和 `ams_mapping_info` 注入。
+
+## 5. 实机验证结果
+
+- 打印任务成功启动：是
+- 灰色正常打印：是
+- 第一次灰色到黄色 AMS 自动换料：**成功**
+- 黄色继续打印：**成功**
+- 整体打印完成：**成功**
+- 实机验收：`M4_X1C_FIRST_COLOR_CHANGE_V1121=PASS`
+
+状态序列：
+
+`FAILED -> PREPARE -> RUNNING -> PAUSE -> RUNNING -> FINISH`
+
+实时事件数量：**2440**
+
+## 6. 打印文件
+
+- 文件：`originium_slug_x1c_bicolor_clean_v1070.gcode.3mf`
+- 大小：`1544293 bytes`
+- SHA256：`550d957ade2d37f6a315a7bd14aacb4e08c008a57f190d2c2c6fc066acc579d0`
+
+## 7. 当前完成链路
+
+`预切片模型 -> Developer Mode 后端发送 -> AMS 自动选料 -> 灰色打印 -> 自动换黄色 -> 连续打印 -> 打印完成`
+
+## 8. 结论
+
+**M4 X1C Developer Mode 双色打印主链路已完成实机验证。**
+
+本次实验已经证明：
+
+1. 自研后端可以在不手动操作 Bambu Studio GUI 的情况下启动 X1C 打印；
+2. 双色模型的 AMS 物理槽位映射正确；
+3. 修正后的 raw wire AMS mapping 可以完成第一次真实换色；
+4. 灰色到黄色自动换料成功；
+5. 整体双色打印成功完成。
+
+本报告只锁定 Developer Mode 双色打印与 AMS 自动换料成功。
+如需进一步宣称“X1C Native AI 检测后自动调整打印参数”，仍需单独的闭环控制验收证据。
+
+## 9. 证据文件
+
+- Acceptance：`E:\nl-am-requirement-parser-M2-source-20260804_152224\outputs\m4\M2-1E4B2301FADD\m4_developer_backend_final_acceptance_v1120.json`
+- Live events：`E:\nl-am-requirement-parser-M2-source-20260804_152224\outputs\m4\M2-1E4B2301FADD\m4_developer_backend_final_live_events_v1120.jsonl`
+- Wire mapping audit：`E:\nl-am-requirement-parser-M2-source-20260804_152224\outputs\m4\M2-1E4B2301FADD\diagnostics_v1120\m4_x1c_wire_mapping_v1120.json`
+- 结构化报告：`E:\nl-am-requirement-parser-M2-source-20260804_152224\outputs\m4\M2-1E4B2301FADD\m4_x1c_bicolor_print_success_report_v1122.json`

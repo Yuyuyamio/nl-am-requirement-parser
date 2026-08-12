@@ -1,0 +1,54 @@
+﻿{
+    "schema_version":  "0.1.0",
+    "module":  "M4",
+    "report_version":  "11.2.2",
+    "generated_at":  "2026-08-12 18:27:41 +08:00",
+    "request_id":  "M2-1E4B2301FADD",
+    "printer_model":  "Bambu Lab X1C",
+    "printer_ip":  "172.16.61.6",
+    "device_id":  "00M09A3A1700722",
+    "developer_mode":  true,
+    "bambu_studio_gui_used":  false,
+    "result":  "PASS",
+    "operator_confirmed_complete":  true,
+    "operator_confirmation":  "本次双色打印完整成功完成，首次灰色到黄色自动换料成功。",
+    "logical_filaments":  {
+                              "0":  "GRAY PLA",
+                              "1":  "YELLOW PLA"
+                          },
+    "physical_ams_mapping":  {
+                                 "logical_0_gray":  "AMS slot 1 / tray 0",
+                                 "logical_1_yellow":  "AMS slot 4 / tray 3"
+                             },
+    "cli_mapping":  [
+                        0,
+                        3
+                    ],
+    "raw_wire_mapping":  [
+                             0,
+                             3,
+                             -1,
+                             -1,
+                             -1
+                         ],
+    "use_ams":  true,
+    "ams_mapping2_sent":  false,
+    "ams_mapping_info_sent":  false,
+    "state_sequence":  [
+                           "FAILED",
+                           "PREPARE",
+                           "RUNNING",
+                           "PAUSE",
+                           "RUNNING",
+                           "FINISH"
+                       ],
+    "event_count":  2440,
+    "artifact":  "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\outputs\\m4\\M2-1E4B2301FADD\\final_assets_v1070\\originium_slug_x1c_bicolor_clean_v1070.gcode.3mf",
+    "artifact_size_bytes":  1544293,
+    "artifact_sha256":  "550d957ade2d37f6a315a7bd14aacb4e08c008a57f190d2c2c6fc066acc579d0",
+    "evidence":  {
+                     "acceptance_json":  "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\outputs\\m4\\M2-1E4B2301FADD\\m4_developer_backend_final_acceptance_v1120.json",
+                     "events_jsonl":  "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\outputs\\m4\\M2-1E4B2301FADD\\m4_developer_backend_final_live_events_v1120.jsonl",
+                     "wire_mapping_audit_json":  "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\outputs\\m4\\M2-1E4B2301FADD\\diagnostics_v1120\\m4_x1c_wire_mapping_v1120.json"
+                 }
+}
