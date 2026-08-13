@@ -229,39 +229,14 @@ class SessionReuseImplicitFTP_TLS(ftplib.FTP_TLS):
         return self.voidresp()
 
     def retrbinary(self, cmd, callback, blocksize=8192, rest=None):
-        # X1C_RETR_RESILIENCE_V1200
-        # Stop once the server-announced RETR size is received, and retry a
-        # bounded number of transient data-socket timeouts.
         self.voidcmd("TYPE I")
-        conn, expected_size = self.ntransfercmd(cmd, rest)
-        received = 0
-        consecutive_timeouts = 0
-
-        with conn:
-            while expected_size is None or received < expected_size:
-                try:
-                    data = conn.recv(blocksize)
-                except TimeoutError:
-                    consecutive_timeouts += 1
-                    if consecutive_timeouts > 2:
-                        raise
-                    continue
-
+        with self.transfercmd(cmd, rest) as conn:
+            while True:
+                data = conn.recv(blocksize)
                 if not data:
                     break
-
-                consecutive_timeouts = 0
-                received += len(data)
                 callback(data)
-
-            if expected_size is not None and received < expected_size:
-                raise Gate2V32Error(
-                    "FTPS RETR ended early: "
-                    f"received={received} expected={expected_size}"
-                )
-
             self._safe_unwrap(conn)
-
         return self.voidresp()
 
 

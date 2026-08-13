@@ -976,10 +976,7 @@ def create_m2_stl_handoff(
                 ][2],
                 target_height_mm,
                 rel_tol=1e-7,
-                abs_tol=max(
-                    0.05,
-                    target_height_mm * 0.001,
-                ),
+                abs_tol=1e-5,
             )
         ),
         "base_aligned_z0": (

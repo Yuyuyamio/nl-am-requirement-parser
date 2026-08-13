@@ -159,12 +159,6 @@ def slice_with_bambu_cli(
 
     cmd = [
         str(studio),
-
-        # Automatic preparation in Bambu Studio CLI.
-        # No GUI interaction is required.
-        "--orient",
-        "--arrange", "1",
-
         "--slice", "0",
         "--debug", "2",
         "--outputdir", str(output_path.parent),

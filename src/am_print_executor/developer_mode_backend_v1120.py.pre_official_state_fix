@@ -17,10 +17,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterable
 
-PROJECT_ROOT = Path(os.environ.get(
-    "NL_AM_PROJECT_ROOT",
-    r"E:\nl-am-requirement-parser-M2-source-20260804_152224",
-))
+PROJECT_ROOT = Path(r"E:\nl-am-requirement-parser-M2-source-20260804_152224")
 REQUEST_ID = "M2-1E4B2301FADD"
 EXPECTED_DEVICE_ID = "00M09A3A1700722"
 TASK_DIR = PROJECT_ROOT / "outputs" / "m4" / REQUEST_ID
@@ -159,12 +156,6 @@ def slice_with_bambu_cli(
 
     cmd = [
         str(studio),
-
-        # Automatic preparation in Bambu Studio CLI.
-        # No GUI interaction is required.
-        "--orient",
-        "--arrange", "1",
-
         "--slice", "0",
         "--debug", "2",
         "--outputdir", str(output_path.parent),
@@ -227,27 +218,6 @@ def slice_with_bambu_cli(
     }
 
 
-def _retr_remote_bytes(
-    ftp,
-    remote_name: str,
-    expected_size: int | None,
-) -> bytes:
-    # FTPS_RETR_SIZE_FALLBACK_V1200
-    sink = bytearray()
-    try:
-        ftp.retrbinary(f"RETR {remote_name}", sink.extend)
-    except TimeoutError:
-        if expected_size is None or len(sink) != expected_size:
-            raise
-
-    if expected_size is not None and len(sink) != expected_size:
-        raise DeveloperBackendError(
-            "Remote RETR size verification failed: "
-            f"received={len(sink)} expected={expected_size}"
-        )
-    return bytes(sink)
-
-
 def _ftps_upload_verified(
     artifact_path: Path,
     access_code: str,
@@ -298,12 +268,9 @@ def _ftps_upload_verified(
         reused = False
 
         if exists:
-            remote_bytes = _retr_remote_bytes(
-                ftp,
-                remote_name,
-                remote_size,
-            )
-            remote_sha = hashlib.sha256(remote_bytes).hexdigest()
+            sink = bytearray()
+            ftp.retrbinary(f"RETR {remote_name}", sink.extend)
+            remote_sha = hashlib.sha256(bytes(sink)).hexdigest()
             if remote_sha != artifact["sha256"]:
                 raise DeveloperBackendError(
                     f"Remote file already exists with different SHA-256: {remote_name}"
@@ -319,12 +286,9 @@ def _ftps_upload_verified(
                     f"Remote SIZE verification failed: observed={remote_size}"
                 )
 
-            remote_bytes = _retr_remote_bytes(
-                ftp,
-                remote_name,
-                remote_size,
-            )
-            remote_sha = hashlib.sha256(remote_bytes).hexdigest()
+            sink = bytearray()
+            ftp.retrbinary(f"RETR {remote_name}", sink.extend)
+            remote_sha = hashlib.sha256(bytes(sink)).hexdigest()
             if remote_sha != artifact["sha256"]:
                 raise DeveloperBackendError("Remote SHA-256 verification failed.")
 
@@ -354,78 +318,15 @@ def _ftps_upload_verified(
 def _strict_idle_check(print_obj: dict[str, Any]) -> dict[str, Any]:
     state = str(print_obj.get("gcode_state", "")).strip().upper()
     hms = print_obj.get("hms")
-
-    def _num(value):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    nozzle_target = _num(print_obj.get("nozzle_target_temper"))
-    bed_target = _num(print_obj.get("bed_target_temper"))
-
-    # Match Bambu Studio's official state classification:
-    # active printing: PAUSE / RUNNING / SLICING / PREPARE
-    # finished: FINISH / FAILED
-    active_states = {
-        "PAUSE",
-        "RUNNING",
-        "SLICING",
-        "PREPARE",
-    }
-
-    finished_states = {
-        "FINISH",
-        "FAILED",
-    }
-
-    state_is_active = state in active_states
-
-    safe_terminal_state = (
-        state == "IDLE"
-        or state in finished_states
-    )
-
-    print_error_zero = (
-        print_obj.get("print_error") == 0
-    )
-
-    sdcard_available = (
-        print_obj.get("sdcard") is True
-    )
-
-    hms_empty = (
-        isinstance(hms, list)
-        and len(hms) == 0
-    )
-
-    heater_targets_safe = (
-        nozzle_target is not None
-        and nozzle_target <= 40
-        and bed_target is not None
-        and bed_target <= 40
-    )
-
     checks = {
-        "official_safe_terminal_state": safe_terminal_state,
-        "official_state_not_active": not state_is_active,
-        "print_error_zero": print_error_zero,
-        "sdcard_available": sdcard_available,
-        "hms_empty": hms_empty,
-        "heater_targets_safe": heater_targets_safe,
+        "gcode_state_idle": state == "IDLE",
+        "print_error_zero": print_obj.get("print_error") == 0,
+        "sdcard_available": print_obj.get("sdcard") is True,
+        "hms_empty": isinstance(hms, list) and len(hms) == 0,
+        "remaining_time_zero": print_obj.get("mc_remaining_time") in (0, 0.0, "0"),
     }
-
-    passed = (
-        safe_terminal_state
-        and not state_is_active
-        and print_error_zero
-        and sdcard_available
-        and hms_empty
-        and heater_targets_safe
-    )
-
     return {
-        "passed": passed,
+        "passed": all(checks.values()),
         "checks": checks,
         "observed": {
             "gcode_state": print_obj.get("gcode_state"),
@@ -434,20 +335,7 @@ def _strict_idle_check(print_obj: dict[str, Any]) -> dict[str, Any]:
             "hms": hms,
             "mc_percent": print_obj.get("mc_percent"),
             "mc_remaining_time": print_obj.get("mc_remaining_time"),
-            "print_real_action": print_obj.get("print_real_action"),
-            "print_gcode_action": print_obj.get("print_gcode_action"),
-            "nozzle_target_temper": print_obj.get("nozzle_target_temper"),
-            "bed_target_temper": print_obj.get("bed_target_temper"),
         },
-        "state_interpretation": (
-            "active"
-            if state_is_active
-            else "finished"
-            if state in finished_states
-            else "idle"
-            if state == "IDLE"
-            else "unknown"
-        ),
     }
 
 
@@ -478,10 +366,7 @@ def build_project_file_payload(
             raise DeveloperBackendError("X1C AMS mapping cannot exceed 5 project positions.")
         mapping_value: Any = list(ams_mapping) + [-1] * (5 - len(ams_mapping))
     else:
-        # Bambu Studio represents the external spool as
-        # a virtual tray. For the legacy X1/P1 mapping,
-        # external-spool project filaments are encoded as -1.
-        mapping_value = [-1]
+        mapping_value = ""
 
     return {
         "print": {

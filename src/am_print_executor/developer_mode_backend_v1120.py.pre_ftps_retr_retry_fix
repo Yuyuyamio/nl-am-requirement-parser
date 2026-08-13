@@ -17,10 +17,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterable
 
-PROJECT_ROOT = Path(os.environ.get(
-    "NL_AM_PROJECT_ROOT",
-    r"E:\nl-am-requirement-parser-M2-source-20260804_152224",
-))
+PROJECT_ROOT = Path(r"E:\nl-am-requirement-parser-M2-source-20260804_152224")
 REQUEST_ID = "M2-1E4B2301FADD"
 EXPECTED_DEVICE_ID = "00M09A3A1700722"
 TASK_DIR = PROJECT_ROOT / "outputs" / "m4" / REQUEST_ID
@@ -159,12 +156,6 @@ def slice_with_bambu_cli(
 
     cmd = [
         str(studio),
-
-        # Automatic preparation in Bambu Studio CLI.
-        # No GUI interaction is required.
-        "--orient",
-        "--arrange", "1",
-
         "--slice", "0",
         "--debug", "2",
         "--outputdir", str(output_path.parent),
@@ -227,27 +218,6 @@ def slice_with_bambu_cli(
     }
 
 
-def _retr_remote_bytes(
-    ftp,
-    remote_name: str,
-    expected_size: int | None,
-) -> bytes:
-    # FTPS_RETR_SIZE_FALLBACK_V1200
-    sink = bytearray()
-    try:
-        ftp.retrbinary(f"RETR {remote_name}", sink.extend)
-    except TimeoutError:
-        if expected_size is None or len(sink) != expected_size:
-            raise
-
-    if expected_size is not None and len(sink) != expected_size:
-        raise DeveloperBackendError(
-            "Remote RETR size verification failed: "
-            f"received={len(sink)} expected={expected_size}"
-        )
-    return bytes(sink)
-
-
 def _ftps_upload_verified(
     artifact_path: Path,
     access_code: str,
@@ -298,12 +268,9 @@ def _ftps_upload_verified(
         reused = False
 
         if exists:
-            remote_bytes = _retr_remote_bytes(
-                ftp,
-                remote_name,
-                remote_size,
-            )
-            remote_sha = hashlib.sha256(remote_bytes).hexdigest()
+            sink = bytearray()
+            ftp.retrbinary(f"RETR {remote_name}", sink.extend)
+            remote_sha = hashlib.sha256(bytes(sink)).hexdigest()
             if remote_sha != artifact["sha256"]:
                 raise DeveloperBackendError(
                     f"Remote file already exists with different SHA-256: {remote_name}"
@@ -319,12 +286,9 @@ def _ftps_upload_verified(
                     f"Remote SIZE verification failed: observed={remote_size}"
                 )
 
-            remote_bytes = _retr_remote_bytes(
-                ftp,
-                remote_name,
-                remote_size,
-            )
-            remote_sha = hashlib.sha256(remote_bytes).hexdigest()
+            sink = bytearray()
+            ftp.retrbinary(f"RETR {remote_name}", sink.extend)
+            remote_sha = hashlib.sha256(bytes(sink)).hexdigest()
             if remote_sha != artifact["sha256"]:
                 raise DeveloperBackendError("Remote SHA-256 verification failed.")
 
