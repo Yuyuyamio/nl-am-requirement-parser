@@ -1,0 +1,432 @@
+﻿import json
+import tempfile
+import unittest
+import zipfile
+
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+import am_print_executor.multimaterial_project as p
+
+
+class MultiMaterialProjectTests(
+    unittest.TestCase
+):
+
+    def make_fixture(
+        self,
+        root: Path,
+    ):
+        gray = (
+            root / "gray.stl"
+        )
+
+        yellow = (
+            root / "yellow.stl"
+        )
+
+        gray.write_text(
+            "solid g\nendsolid g\n",
+            encoding="ascii",
+        )
+
+        yellow.write_text(
+            "solid y\nendsolid y\n",
+            encoding="ascii",
+        )
+
+        fg = (
+            root / "gray.json"
+        )
+
+        fy = (
+            root / "yellow.json"
+        )
+
+        fg.write_text(
+            '{"name":"Gray"}',
+            encoding="utf-8",
+        )
+
+        fy.write_text(
+            '{"name":"Yellow"}',
+            encoding="utf-8",
+        )
+
+        manifest = (
+            root / "fixture.json"
+        )
+
+        manifest.write_text(
+            json.dumps(
+                {
+                    "status":
+                        "multimaterial_fixture_prepared",
+
+                    "objects": [
+                        {
+                            "path":
+                                str(gray),
+
+                            "project_filament_id":
+                                1,
+                        },
+                        {
+                            "path":
+                                str(yellow),
+
+                            "project_filament_id":
+                                2,
+                        },
+                    ],
+
+                    "filament_profiles": [
+                        str(fg),
+                        str(fy),
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        return manifest
+
+
+    def make_task(
+        self,
+        root: Path,
+    ):
+        task = (
+            root / "task"
+        )
+
+        cache = (
+            task
+            / ".nl_am_bambu_cli_profiles"
+        )
+
+        cache.mkdir(
+            parents=True
+        )
+
+        (
+            cache
+            / "machine_a.json"
+        ).write_text(
+            "{}",
+            encoding="utf-8",
+        )
+
+        (
+            cache
+            / "process_a.json"
+        ).write_text(
+            "{}",
+            encoding="utf-8",
+        )
+
+        return task
+
+
+    def test_assemble_payload_maps_two_objects(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            manifest = (
+                self.make_fixture(
+                    root
+                )
+            )
+
+            obj = (
+                p.build_assemble_payload(
+                    manifest
+                )
+            )
+
+            rows = (
+                obj["plates"][0][
+                    "objects"
+                ]
+            )
+
+            self.assertEqual(
+                rows[0][
+                    "filaments"
+                ],
+                [1],
+            )
+
+            self.assertEqual(
+                rows[1][
+                    "filaments"
+                ],
+                [2],
+            )
+
+
+    def test_project_inspection_requires_two_filaments(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            path = (
+                Path(td)
+                / "project.3mf"
+            )
+
+            settings = {
+                "filament_settings_id": [
+                    "Gray PLA",
+                    "Yellow PLA",
+                ],
+
+                "filament_colour": [
+                    "#A6A9AA",
+                    "#F4EE2A",
+                ],
+            }
+
+            with zipfile.ZipFile(
+                path,
+                "w",
+            ) as zf:
+                zf.writestr(
+                    "Metadata/"
+                    "project_settings.config",
+                    json.dumps(
+                        settings
+                    ),
+                )
+
+            result = (
+                p.inspect_project_3mf(
+                    path
+                )
+            )
+
+            self.assertEqual(
+                result[
+                    "project_filament_count"
+                ],
+                2,
+            )
+
+
+    def test_help_false_is_not_a_runtime_gate(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            studio = (
+                root
+                / "bambu-studio.exe"
+            )
+
+            studio.write_bytes(
+                b"x"
+            )
+
+            manifest = (
+                self.make_fixture(
+                    root
+                )
+            )
+
+            task = (
+                self.make_task(
+                    root
+                )
+            )
+
+            output = (
+                root
+                / "out.project.3mf"
+            )
+
+            def fake_run(
+                cmd,
+                **kwargs,
+            ):
+                with zipfile.ZipFile(
+                    output,
+                    "w",
+                ) as zf:
+                    zf.writestr(
+                        "Metadata/"
+                        "project_settings.config",
+                        json.dumps(
+                            {
+                                "filament_settings_id": [
+                                    "Gray",
+                                    "Yellow",
+                                ],
+                                "filament_colour": [
+                                    "#A6A9AA",
+                                    "#F4EE2A",
+                                ],
+                            }
+                        ),
+                    )
+
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            with (
+                mock.patch.object(
+                    p,
+                    "probe_cli_help",
+                    return_value={
+                        "available":
+                            True,
+                        "flags": {
+                            "--load-settings":
+                                False,
+                            "--load-filaments":
+                                False,
+                            "--load-assemble-list":
+                                False,
+                            "--export-3mf":
+                                False,
+                        },
+                        "authoritative":
+                            False,
+                    },
+                ),
+
+                mock.patch.object(
+                    p.subprocess,
+                    "run",
+                    side_effect=
+                        fake_run,
+                ),
+            ):
+                result = (
+                    p.assemble_project(
+                        studio_exe=
+                            studio,
+
+                        fixture_manifest=
+                            manifest,
+
+                        source_task_dir=
+                            task,
+
+                        output_path=
+                            output,
+                    )
+                )
+
+            self.assertEqual(
+                result["status"],
+                "multimaterial_project_assembled",
+            )
+
+            self.assertTrue(
+                result[
+                    "capability_validation"
+                ][
+                    "runtime_validated"
+                ]
+            )
+
+            self.assertFalse(
+                result[
+                    "policy"
+                ][
+                    "help_text_used_as_gate"
+                ]
+            )
+
+
+    def test_stale_output_never_counts_as_success(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            studio = (
+                root
+                / "bambu-studio.exe"
+            )
+
+            studio.write_bytes(
+                b"x"
+            )
+
+            manifest = (
+                self.make_fixture(
+                    root
+                )
+            )
+
+            task = (
+                self.make_task(
+                    root
+                )
+            )
+
+            output = (
+                root
+                / "out.project.3mf"
+            )
+
+            output.write_bytes(
+                b"stale"
+            )
+
+            with (
+                mock.patch.object(
+                    p,
+                    "probe_cli_help",
+                    return_value={
+                        "available":
+                            True,
+                        "flags": {},
+                        "authoritative":
+                            False,
+                    },
+                ),
+
+                mock.patch.object(
+                    p.subprocess,
+                    "run",
+                    return_value=
+                        SimpleNamespace(
+                            returncode=1,
+                            stdout="",
+                            stderr="fail",
+                        ),
+                ),
+            ):
+                with self.assertRaises(
+                    p.MultiMaterialProjectError
+                ):
+                    p.assemble_project(
+                        studio_exe=
+                            studio,
+
+                        fixture_manifest=
+                            manifest,
+
+                        source_task_dir=
+                            task,
+
+                        output_path=
+                            output,
+                    )
+
+            self.assertFalse(
+                output.exists()
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
+

@@ -29,6 +29,9 @@ PROVIDER_REQUEST_FILENAME = (
 PROVIDER_SUBMISSION_FILENAME = (
     "provider_submission.json"
 )
+MANUFACTURABILITY_FEEDBACK_FILENAME = (
+    "manufacturability_feedback.json"
+)
 
 
 def _read_json_object(
@@ -478,12 +481,32 @@ def submit_m2_plan(
         m2_request=m2_request,
     )
 
+    feedback_path = (
+        task_path
+        / MANUFACTURABILITY_FEEDBACK_FILENAME
+    )
+
+    manufacturability_feedback = None
+
+    if feedback_path.is_file():
+        manufacturability_feedback = (
+            _read_json_object(
+                feedback_path,
+                label=(
+                    "Manufacturability Feedback"
+                ),
+            )
+        )
+
     provider_request = (
         build_creative_generation_request(
             m2_request=m2_request,
             source_spec=source_spec,
             provider_name=(
                 normalized_provider
+            ),
+            manufacturability_feedback=(
+                manufacturability_feedback
             ),
         )
     )

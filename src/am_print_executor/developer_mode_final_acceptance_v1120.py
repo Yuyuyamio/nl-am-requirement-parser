@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import re
 import ssl
 import sys
@@ -11,11 +12,30 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Any
+from am_print_executor.ams_mapping import AmsMappingError, parse_logical_mapping, to_x1c_wire_mapping, validate_logical_mapping
 
-PROJECT_ROOT = Path(r"E:\nl-am-requirement-parser-M2-source-20260804_152224")
-REQUEST_ID = "M2-1E4B2301FADD"
+PROJECT_ROOT = Path(
+    os.environ.get(
+        "NL_AM_PROJECT_ROOT",
+        str(Path(__file__).resolve().parents[2]),
+    )
+).expanduser().resolve()
+
+# This ID identifies already-validated X1C device evidence.
+# It is NOT the current model/job request ID.
+REQUEST_ID = os.environ.get(
+    "NL_AM_DEVICE_EVIDENCE_REQUEST_ID",
+    "M2-1E4B2301FADD",
+)
+
 EXPECTED_DEVICE_ID = "00M09A3A1700722"
-TASK_DIR = PROJECT_ROOT / "outputs" / "m4" / REQUEST_ID
+
+TASK_DIR = (
+    PROJECT_ROOT
+    / "outputs"
+    / "m4"
+    / REQUEST_ID
+)
 
 EVENTS_OUT = TASK_DIR / "m4_developer_backend_final_live_events_v1120.jsonl"
 REPORT_OUT = TASK_DIR / "m4_developer_backend_final_acceptance_v1120.json"
@@ -30,9 +50,16 @@ def _load_backend():
     return backend
 
 
-def _load_identity():
+def _load_identity(
+    project_root: Path,
+    device_evidence_request_id: str,
+):
     from am_print_executor.ftps_probe_v32 import load_gate1_identity
-    ident = load_gate1_identity(PROJECT_ROOT, REQUEST_ID)
+
+    ident = load_gate1_identity(
+        project_root,
+        device_evidence_request_id,
+    )
     if ident.get("device_id") != EXPECTED_DEVICE_ID:
         raise FinalAcceptanceError("Locked DEVICE_ID mismatch.")
     return ident
@@ -217,39 +244,98 @@ def _extract_ams_state(obj: Any, prefix: str = "") -> dict[str, Any]:
 
 
 def _parse_mapping(text: str) -> list[int]:
-    vals = [x.strip() for x in text.split(",") if x.strip()]
-    if not vals:
-        raise FinalAcceptanceError("AMS mapping cannot be empty.")
     try:
-        result = [int(x) for x in vals]
-    except ValueError as exc:
-        raise FinalAcceptanceError("AMS mapping must be comma-separated integers.") from exc
-    if not all(-1 <= x <= 255 for x in result):
-        raise FinalAcceptanceError("AMS mapping values must be between -1 and 255.")
-    return result
+        # Final multi-material acceptance uses logical mappings
+        # only. -1 wire padding is forbidden here and physical
+        # slots must be distinct for this acceptance workflow.
+        return parse_logical_mapping(
+            text,
+            require_distinct=True,
+        )
+    except AmsMappingError as exc:
+        raise FinalAcceptanceError(
+            str(exc)
+        ) from exc
 
 
-def _write_event(event: dict[str, Any]) -> None:
-    with EVENTS_OUT.open("a", encoding="utf-8", newline="\n") as f:
+def _write_event(
+    events_out: Path,
+    event: dict[str, Any],
+) -> None:
+    events_out.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with events_out.open(
+        "a",
+        encoding="utf-8",
+        newline="\n",
+    ) as f:
         f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
-def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
+def run_live(
+    artifact: Path,
+    mapping: list[int],
+    monitor_seconds: int,
+    *,
+    project_root: Path,
+    job_request_id: str,
+    device_evidence_request_id: str,
+) -> int:
     import paho.mqtt.client as mqtt
     from am_print_executor.gate8fc_native_ai_correlation_v880 import correlate
 
+    project_root = Path(
+        project_root
+    ).expanduser().resolve()
+
+    task_dir = (
+        project_root
+        / "outputs"
+        / "m4"
+        / job_request_id
+    )
+
+    task_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    events_out = (
+        task_dir
+        / "m4_developer_backend_final_live_events_v1120.jsonl"
+    )
+
+    report_out = (
+        task_dir
+        / "m4_developer_backend_final_acceptance_v1120.json"
+    )
+
     backend = _load_backend()
-    identity = _load_identity()
+
+    identity = _load_identity(
+        project_root,
+        device_evidence_request_id,
+    )
 
     inspect = backend.inspect_gcode_3mf(artifact)
     mm = _inspect_project_filaments(Path(inspect["path"]))
 
     expected_count = mm.get("project_filament_count")
-    if isinstance(expected_count, int) and expected_count > 0 and len(mapping) != expected_count:
-        raise FinalAcceptanceError(
-            f"AMS mapping length mismatch: project has {expected_count} filament preset(s), "
-            f"mapping has {len(mapping)} value(s)."
-        )
+
+    if isinstance(expected_count, int) and expected_count > 0:
+        try:
+            mapping = validate_logical_mapping(
+                mapping,
+                expected_count=expected_count,
+                require_distinct=True,
+            )
+        except AmsMappingError as exc:
+            raise FinalAcceptanceError(
+                str(exc)
+            ) from exc
 
     if not mm.get("multi_material_candidate"):
         raise FinalAcceptanceError(
@@ -257,11 +343,22 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
             "Final AMS acceptance is intentionally blocked."
         )
 
-    if EVENTS_OUT.exists() or REPORT_OUT.exists():
+    if events_out.exists() or report_out.exists():
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        archive = TASK_DIR / "archive" / f"before_v1010_{stamp}"
-        archive.mkdir(parents=True, exist_ok=True)
-        for p in (EVENTS_OUT, REPORT_OUT):
+        archive = (
+            task_dir
+            / "archive"
+            / f"before_v1120_{stamp}"
+        )
+        archive.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        for p in (
+            events_out,
+            report_out,
+        ):
             if p.exists():
                 p.replace(archive / p.name)
         print(f"[ARCHIVE] Previous V10.1 evidence preserved: {archive}")
@@ -434,7 +531,10 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
             "raw_print_object": pobj,
         }
         raw_events.append(event)
-        _write_event(event)
+        _write_event(
+            events_out,
+            event,
+        )
         last_snapshot = snapshot
 
     client = mqtt.Client(
@@ -499,7 +599,12 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
 
         print("[PASS] Native-AI/status monitor is listening.")
         print("Uploading audited/sliced artifact via FTPS...")
-        upload = backend._ftps_upload_verified(Path(inspect["path"]), access_code)
+        upload = backend._ftps_upload_verified(
+            Path(inspect["path"]),
+            access_code,
+            project_root=project_root,
+            identity_request_id=device_evidence_request_id,
+        )
         print("[PASS] FTPS upload + SHA256 verification complete.")
 
         sequence_id = str(int(time.time() * 1000))
@@ -585,12 +690,25 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
         "version": "11.2.0",
         "created_unix": time.time(),
         "status": final_status,
-        "project_root": str(PROJECT_ROOT),
+        "project_root": str(project_root),
+        "job_request_id": job_request_id,
+        "device_evidence_request_id": device_evidence_request_id,
         "device_id": device_id,
         "artifact": inspect,
         "artifact_multi_material_inspection": mm,
         "ams_mapping_logical": mapping,
-        "ams_mapping_wire": json.dumps(mapping, separators=(",", ":")),
+
+        # Compatibility string field retained, but now contains
+        # the ACTUAL device-wire mapping rather than a serialized
+        # copy of the logical mapping.
+        "ams_mapping_wire": json.dumps(
+            to_x1c_wire_mapping(mapping),
+            separators=(",", ":"),
+        ),
+
+        # Canonical structured evidence for new consumers.
+        "ams_mapping_wire_array":
+            to_x1c_wire_mapping(mapping),
         "bambu_studio_gui_used": False,
         "developer_mode_direct_start": {
             "mqtt_publish_count": 1,
@@ -622,7 +740,7 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
         },
     }
 
-    REPORT_OUT.write_text(
+    report_out.write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -634,10 +752,122 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
     print(f"Native xcam observed: {xcam_seen}")
     print(f"AMS transition observed: {ams_transition}")
     print(f"Gate8F-C: {corr.get('overall_interpretation')}")
-    print(f"Events: {EVENTS_OUT}")
-    print(f"Report: {REPORT_OUT}")
+    print(f"Events: {events_out}")
+    print(f"Report: {report_out}")
 
     return 0 if final_status == "gui_free_developer_mode_ams_native_ai_validated" else 3
+
+
+
+def acceptance_preflight(
+    artifact: Path,
+    mapping: list[int],
+    *,
+    project_root: Path,
+    job_request_id: str,
+    device_evidence_request_id: str,
+) -> dict[str, Any]:
+    """
+    Local-only final acceptance preflight.
+
+    Missing/invalid local device evidence is a structured blocker,
+    never an uncaught exception.
+
+    No MQTT.
+    No FTPS.
+    No printer connection.
+    No print command.
+    """
+
+    project_root = Path(
+        project_root
+    ).expanduser().resolve()
+
+    backend = _load_backend()
+
+    artifact_info = backend.inspect_gcode_3mf(
+        Path(artifact)
+    )
+
+    material_info = _inspect_project_filaments(
+        Path(artifact_info["path"])
+    )
+
+    reasons: list[str] = []
+
+    expected_count = material_info.get(
+        "project_filament_count"
+    )
+
+    if not material_info.get(
+        "multi_material_candidate"
+    ):
+        reasons.append(
+            "artifact_is_not_multi_material"
+        )
+
+    if (
+        isinstance(expected_count, int)
+        and expected_count > 0
+        and len(mapping) != expected_count
+    ):
+        reasons.append(
+            "ams_mapping_length_mismatch"
+        )
+
+    identity = None
+    identity_error = None
+
+    try:
+        identity = _load_identity(
+            project_root,
+            device_evidence_request_id,
+        )
+    except Exception as exc:
+        identity_error = (
+            f"{type(exc).__name__}: {exc}"
+        )
+        reasons.append(
+            "device_identity_evidence_missing_or_invalid"
+        )
+
+    passed = not reasons
+
+    return {
+        "status": (
+            "live_acceptance_ready"
+            if passed
+            else "live_acceptance_blocked"
+        ),
+        "passed": passed,
+        "project_root": str(project_root),
+        "job_request_id": job_request_id,
+        "device_evidence_request_id": (
+            device_evidence_request_id
+        ),
+        "device_identity_evidence_valid": (
+            identity is not None
+        ),
+        "device_evidence_error": identity_error,
+        "device_id": (
+            identity.get("device_id")
+            if identity
+            else None
+        ),
+        "printer_ip_from_local_evidence": (
+            identity.get("ip_address")
+            if identity
+            else None
+        ),
+        "artifact": artifact_info,
+        "material_inspection": material_info,
+        "ams_mapping": mapping,
+        "blocking_reasons": reasons,
+        "network_used": False,
+        "printer_command_sent": False,
+        "access_code_requested": False,
+    }
+
 
 
 def main() -> int:
@@ -645,21 +875,93 @@ def main() -> int:
     parser.add_argument("--scan", action="store_true")
     parser.add_argument("--artifact")
     parser.add_argument("--ams-mapping")
-    parser.add_argument("--monitor-seconds", type=int, default=1200)
+    parser.add_argument(
+        "--monitor-seconds",
+        type=int,
+        default=1200,
+    )
+
+    parser.add_argument(
+        "--project-root",
+        default=str(PROJECT_ROOT),
+    )
+
+    parser.add_argument(
+        "--job-request-id",
+    )
+
+    parser.add_argument(
+        "--device-evidence-request-id",
+        default=REQUEST_ID,
+    )
+
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+    )
+
     args = parser.parse_args()
 
     if args.scan:
         return scan_only()
 
     if not args.artifact:
-        raise FinalAcceptanceError("--artifact is required for live acceptance.")
+        raise FinalAcceptanceError(
+            "--artifact is required."
+        )
+
     if not args.ams_mapping:
-        raise FinalAcceptanceError("--ams-mapping is required for AMS live acceptance.")
+        raise FinalAcceptanceError(
+            "--ams-mapping is required."
+        )
+
+    if not args.job_request_id:
+        raise FinalAcceptanceError(
+            "--job-request-id is required."
+        )
+
+    project_root = Path(
+        args.project_root
+    ).expanduser().resolve()
+
+    mapping = _parse_mapping(
+        args.ams_mapping
+    )
+
+    if args.preflight_only:
+        result = acceptance_preflight(
+            Path(args.artifact),
+            mapping,
+            project_root=project_root,
+            job_request_id=args.job_request_id,
+            device_evidence_request_id=(
+                args.device_evidence_request_id
+            ),
+        )
+
+        print(
+            json.dumps(
+                result,
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+
+        return (
+            0
+            if result["passed"]
+            else 4
+        )
 
     return run_live(
         Path(args.artifact),
-        _parse_mapping(args.ams_mapping),
+        mapping,
         args.monitor_seconds,
+        project_root=project_root,
+        job_request_id=args.job_request_id,
+        device_evidence_request_id=(
+            args.device_evidence_request_id
+        ),
     )
 
 

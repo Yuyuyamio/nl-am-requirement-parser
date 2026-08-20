@@ -1,0 +1,69 @@
+[35mscripts/run_m4_x1c_first_color_change_v1121.ps1[m[36m:[m[32m11[m[36m:[m    [string]$[1;31mAms[m[1;31mMapping[m,
+[35mscripts/run_m4_x1c_first_color_change_v1121.ps1[m[36m:[m[32m60[m[36m:[mWrite-Host "[1;31mAMS[m [1;31mmapping[m               : $[1;31mAms[m[1;31mMapping[m"
+[35mscripts/run_m4_x1c_first_color_change_v1121.ps1[m[36m:[m[32m67[m[36m:[m    '--[1;31mams[m-[1;31mmapping[m',
+[35mscripts/run_m4_x1c_first_color_change_v1121.ps1[m[36m:[m[32m68[m[36m:[m    $[1;31mAms[m[1;31mMapping[m,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m67[m[36m:[mdef _inspect_project_[1;31mfilament[ms(path: Path) -> dict[str, Any]:
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m76[m[36m:[m        "project_[1;31mfilament[m_count": None,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m77[m[36m:[m        "[1;31mfilament[m_settings_id": None,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m78[m[36m:[m        "[1;31mfilament[m_colours": None,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m99[m[36m:[m                    fsid = obj.get("[1;31mfilament[m_settings_id")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m100[m[36m:[m                    fcol = obj.get("[1;31mfilament[m_colour")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m102[m[36m:[m                        result["[1;31mfilament[m_settings_id"] = fsid
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m103[m[36m:[m                        result["project_[1;31mfilament[m_count"] = len(fsid)
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m105[m[36m:[m                        result["[1;31mfilament[m_colours"] = fcol
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m106[m[36m:[m                        if result["project_[1;31mfilament[m_count"] is None:
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m107[m[36m:[m                            result["project_[1;31mfilament[m_count"] = len(fcol)
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m134[m[36m:[m    count = result["project_[1;31mfilament[m_count"]
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m173[m[36m:[m            info = _inspect_project_[1;31mfilament[ms(p)
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m193[m[36m:[m            f"    project_[1;31mfilament[ms={row.get('project_[1;31mfilament[m_count')} "
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m210[m[36m:[m        print("The runner will ask for this artifact path and an explicit [1;31mAMS[m [1;31mmapping[m.")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m213[m[36m:[m        print("Do not start a final [1;31mAMS[m acceptance print yet.")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m228[m[36m:[mdef _extract_[1;31mams[m_state(obj: Any, prefix: str = "") -> dict[str, Any]:
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m234[m[36m:[m            if any(x in kl for x in ("[1;31mams[m", "tray", "[1;31mfilament[m")):
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m238[m[36m:[m                out.update(_extract_[1;31mams[m_state(v, kp))
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m241[m[36m:[m            out.update(_extract_[1;31mams[m_state(v, f"{prefix}[{i}]"))
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m245[m[36m:[mdef _parse_[1;31mmapping[m(text: str) -> list[int]:
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m248[m[36m:[m        raise FinalAcceptanceError("[1;31mAMS[m [1;31mmapping[m cannot be empty.")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m252[m[36m:[m        raise FinalAcceptanceError("[1;31mAMS[m [1;31mmapping[m must be comma-separated integers.") from exc
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m254[m[36m:[m        raise FinalAcceptanceError("[1;31mAMS[m [1;31mmapping[m values must be between -1 and 255.")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m277[m[36m:[m    [1;31mmapping[m: list[int],
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m321[m[36m:[m    mm = _inspect_project_[1;31mfilament[ms(Path(inspect["path"]))
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m323[m[36m:[m    expected_count = mm.get("project_[1;31mfilament[m_count")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m324[m[36m:[m    if isinstance(expected_count, int) and expected_count > 0 and len([1;31mmapping[m) != expected_count:
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m326[m[36m:[m            f"[1;31mAMS[m [1;31mmapping[m length mismatch: project has {expected_count} [1;31mfilament[m preset(s), "
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m327[m[36m:[m            f"[1;31mmapping[m has {len([1;31mmapping[m)} value(s)."
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m333[m[36m:[m            "Final [1;31mAMS[m acceptance is intentionally blocked."
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m379[m[36m:[m    [1;31mams[m_states: list[dict[str, Any]] = []
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m511[m[36m:[m        [1;31mams[m_state = _extract_[1;31mams[m_state(pobj)
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m512[m[36m:[m        if [1;31mams[m_state and (not [1;31mams[m_states or [1;31mams[m_states[-1] != [1;31mams[m_state):
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m513[m[36m:[m            [1;31mams[m_states.append([1;31mams[m_state)
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m605[m[36m:[m            use_[1;31mams[m=True,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m606[m[36m:[m            [1;31mams[m_[1;31mmapping[m=[1;31mmapping[m,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m655[m[36m:[m    # Determine whether any [1;31mAMS[m/tray/[1;31mfilament[m state actually changed during the run.
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m656[m[36m:[m    [1;31mams[m_transition = len([1;31mams[m_states) >= 2
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m658[m[36m:[m    for st in [1;31mams[m_states:
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m666[m[36m:[m        [1;31mams[m_transition = True
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m669[m[36m:[m        "gui_free_developer_mode_[1;31mams[m_native_ai_validated"
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m670[m[36m:[m        if active.is_set() and xcam_seen and [1;31mams[m_transition
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m671[m[36m:[m        else "gui_free_developer_mode_native_ai_validated_[1;31mams[m_transition_not_proven"
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m689[m[36m:[m        "[1;31mams[m_[1;31mmapping[m_logical": [1;31mmapping[m,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m690[m[36m:[m        "[1;31mams[m_[1;31mmapping[m_wire": json.dumps([1;31mmapping[m, separators=(",", ":")),
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m706[m[36m:[m        "[1;31mams[m": {
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m707[m[36m:[m            "state_change_count": max(0, len([1;31mams[m_states) - 1),
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m708[m[36m:[m            "transition_observed": [1;31mams[m_transition,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m710[m[36m:[m            "sample_states": [1;31mams[m_states[-10:],
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m732[m[36m:[m    print(f"[1;31mAMS[m transition observed: {[1;31mams[m_transition}")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m737[m[36m:[m    return 0 if final_status == "gui_free_developer_mode_[1;31mams[m_native_ai_validated" else 3
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m743[m[36m:[m    [1;31mmapping[m: list[int],
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m771[m[36m:[m    material_info = _inspect_project_[1;31mfilament[ms(
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m778[m[36m:[m        "project_[1;31mfilament[m_count"
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m791[m[36m:[m        and len([1;31mmapping[m) != expected_count
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m794[m[36m:[m            "[1;31mams[m_[1;31mmapping[m_length_mismatch"
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m843[m[36m:[m        "[1;31mams[m_[1;31mmapping[m": [1;31mmapping[m,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m856[m[36m:[m    parser.add_argument("--[1;31mams[m-[1;31mmapping[m")
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m892[m[36m:[m    if not args.[1;31mams[m_[1;31mmapping[m:
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m894[m[36m:[m            "--[1;31mams[m-[1;31mmapping[m is required."
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m906[m[36m:[m    [1;31mmapping[m = _parse_[1;31mmapping[m(
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m907[m[36m:[m        args.[1;31mams[m_[1;31mmapping[m
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m913[m[36m:[m            [1;31mmapping[m,
+[35msrc/am_print_executor/developer_mode_final_acceptance_v1120.py[m[36m:[m[32m937[m[36m:[m        [1;31mmapping[m,

@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+from typing import Any
+
+
+KNOWN = {
+    0: (
+        "CLI_SUCCESS",
+        "?????"
+    ),
+
+    -50: (
+        "CLI_NO_SUITABLE_OBJECTS",
+        "Bambu ??????????????????"
+        "????????????? printable_area ??"
+    ),
+
+    -64: (
+        "CLI_OBJECT_COLLISION_IN_LAYER_PRINT",
+        "????????????????????"
+        "???Prime/Wipe Tower ?????????????"
+    ),
+
+    -104: (
+        "CLI_GCODE_PATH_OUTSIDE",
+        "??? G-code ?????????????"
+        "????????????????????"
+    ),
+}
+
+
+def normalize_bambu_cli_exit_result(
+    result: dict[str, Any],
+) -> dict[str, Any]:
+
+    exit_info = result.get("exit")
+
+    if not isinstance(exit_info, dict):
+        return result
+
+    signed = exit_info.get("signed")
+
+    known = KNOWN.get(signed)
+
+    if known is None:
+        exit_info.setdefault(
+            "reason_zh",
+            "Bambu CLI ????????????"
+            + repr(signed)
+        )
+
+        return result
+
+    symbol, reason = known
+
+    current = exit_info.get("symbol")
+
+    if (
+        not current
+        or str(current).startswith("UNKNOWN_")
+    ):
+        exit_info["symbol"] = symbol
+
+    exit_info["reason_zh"] = reason
+
+    return result

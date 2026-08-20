@@ -460,6 +460,20 @@ def _inspect_mesh(
         extent_values[2]
     )
 
+    # NORMALIZED_VALIDATION_SCALE_FACTOR_V1
+    if (
+        actual_height_mm is None
+        or actual_height_mm <= 0
+    ):
+        scale_factor_to_target_height = None
+    else:
+        scale_factor_to_target_height = (
+            _round_number(
+                target_height_mm
+                / actual_height_mm
+            )
+        )
+
     if actual_height_mm is None:
         height_error_mm = None
         height_error_ratio = None
@@ -564,6 +578,9 @@ def _inspect_mesh(
         "extents_mm": extents_mm,
         "actual_height_mm": (
             actual_height_mm
+        ),
+        "scale_factor_to_target_height": (
+            scale_factor_to_target_height
         ),
         "height_error_mm": (
             height_error_mm
@@ -1054,6 +1071,11 @@ def validate_normalized_m2_mesh(
         ),
         "target_height_mm": (
             target_height_mm
+        ),
+        "scale_factor_to_target_height": (
+            inspection[
+                "scale_factor_to_target_height"
+            ]
         ),
         "actual_height_mm": (
             inspection[

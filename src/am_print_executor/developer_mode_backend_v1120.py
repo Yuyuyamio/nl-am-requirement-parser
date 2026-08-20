@@ -16,11 +16,21 @@ import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Iterable
+from am_print_executor.bambu_profile_resolver import materialize_bambu_cli_profiles
+from am_print_executor.ams_mapping import AmsMappingError, external_spool_wire_mapping, to_x1c_wire_mapping
 
-PROJECT_ROOT = Path(os.environ.get(
-    "NL_AM_PROJECT_ROOT",
-    r"E:\nl-am-requirement-parser-M2-source-20260804_152224",
-))
+def _resolve_project_root() -> Path:
+    """Resolve repository root without a machine-specific hard-coded path."""
+    override = os.environ.get("NL_AM_PROJECT_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    # developer_mode_backend_v1120.py
+    #   repo/src/am_print_executor/<this file>
+    return Path(__file__).resolve().parents[2]
+
+
+PROJECT_ROOT = _resolve_project_root()
 REQUEST_ID = "M2-1E4B2301FADD"
 EXPECTED_DEVICE_ID = "00M09A3A1700722"
 TASK_DIR = PROJECT_ROOT / "outputs" / "m4" / REQUEST_ID
@@ -134,6 +144,116 @@ def inspect_gcode_3mf(path: Path) -> dict[str, Any]:
     }
 
 
+def discover_bambu_profiles(studio_exe: Path) -> dict[str, Path]:
+    """Discover official X1C 0.4 mm / 0.20 Standard / PLA profiles.
+
+    Profile selection is derived from the installed Bambu Studio resources,
+    not from a user-specific absolute profile path.
+    """
+    studio_exe = Path(studio_exe).expanduser().resolve()
+
+    profile_root = (
+        studio_exe.parent
+        / "resources"
+        / "profiles"
+        / "BBL"
+    )
+
+    machine = (
+        profile_root
+        / "machine"
+        / "Bambu Lab X1 Carbon 0.4 nozzle.json"
+    )
+
+    process = (
+        profile_root
+        / "process"
+        / "0.20mm Standard @BBL X1C.json"
+    )
+
+    missing = []
+
+    if not machine.is_file():
+        missing.append(str(machine))
+
+    if not process.is_file():
+        missing.append(str(process))
+
+    if missing:
+        raise DeveloperBackendError(
+            "Required Bambu X1C profiles are missing: "
+            + "; ".join(missing)
+        )
+
+    filament_root = profile_root / "filament"
+
+    candidates = []
+
+    if filament_root.is_dir():
+        for path in filament_root.rglob("*.json"):
+            name = path.name.lower()
+
+            if "bambu pla basic" in name:
+                candidates.append(path)
+                continue
+
+            if name in {
+                "generic pla @base.json",
+                "generic pla.json",
+            }:
+                candidates.append(path)
+
+    def filament_rank(path: Path) -> tuple[int, int, str]:
+        name = path.name.lower()
+
+        if name == "bambu pla basic @bbl x1c.json":
+            return (0, len(name), name)
+
+        if (
+            "bambu pla basic" in name
+            and "x1c" in name
+            and "0.2 nozzle" not in name
+        ):
+            return (1, len(name), name)
+
+        if (
+            "bambu pla basic" in name
+            and "@base" in name
+        ):
+            return (2, len(name), name)
+
+        if name == "generic pla @base.json":
+            return (3, len(name), name)
+
+        if name == "generic pla.json":
+            return (4, len(name), name)
+
+        return (50, len(name), name)
+
+    candidates = sorted(
+        {
+            path.resolve()
+            for path in candidates
+            if path.is_file()
+        },
+        key=filament_rank,
+    )
+
+    if not candidates:
+        raise DeveloperBackendError(
+            f"No usable PLA profile found under: {filament_root}"
+        )
+
+    filament = candidates[0]
+
+    return {
+        "profile_root": profile_root.resolve(),
+        "machine": machine.resolve(),
+        "process": process.resolve(),
+        "filament": filament,
+    }
+
+
 def slice_with_bambu_cli(
     input_path: Path,
     output_path: Path,
@@ -143,53 +263,200 @@ def slice_with_bambu_cli(
     process_json: Path | None = None,
     filament_jsons: Iterable[Path] | None = None,
 ) -> dict[str, Any]:
-    input_path = input_path.resolve()
-    output_path = output_path.resolve()
+    """
+    Slice a model through the single authoritative Bambu Studio CLI path.
+
+    Production contract:
+      * bundled BBL profiles are resolved to complete CLI-ready configs;
+      * raw model input is prepared and sliced in one Bambu invocation;
+      * no intermediate project.3mf is used;
+      * no stale-output glob fallback is allowed;
+      * the exact requested output must be created and pass gcode.3mf inspection.
+    """
+
+    input_path = Path(input_path).resolve()
+    output_path = Path(output_path).resolve()
 
     if not input_path.is_file():
-        raise DeveloperBackendError(f"Slice input missing: {input_path}")
-
-    studio = studio_exe.resolve() if studio_exe else discover_bambu_studio()
-    if studio is None or not studio.is_file():
         raise DeveloperBackendError(
-            "Bambu Studio CLI executable not found. Set BAMBU_STUDIO_EXE or pass --studio."
+            f"Slice input missing: {input_path}"
         )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    studio = (
+        Path(studio_exe).resolve()
+        if studio_exe is not None
+        else discover_bambu_studio()
+    )
 
-    cmd = [
-        str(studio),
+    if studio is None or not Path(studio).is_file():
+        raise DeveloperBackendError(
+            "Bambu Studio CLI executable not found. "
+            "Set BAMBU_STUDIO_EXE or pass --studio."
+        )
 
-        # Automatic preparation in Bambu Studio CLI.
-        # No GUI interaction is required.
-        "--orient",
-        "--arrange", "1",
+    studio = Path(studio).resolve()
 
-        "--slice", "0",
-        "--debug", "2",
-        "--outputdir", str(output_path.parent),
-        "--export-3mf", output_path.name,
+    output_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    fils = [
+        Path(x)
+        for x in (filament_jsons or [])
     ]
 
-    settings = []
-    if machine_json:
-        settings.append(str(machine_json.resolve()))
-    if process_json:
-        settings.append(str(process_json.resolve()))
-    if settings:
-        cmd += ["--load-settings", ";".join(settings)]
+    # Resolve omitted profiles from the installed Bambu Studio bundle.
+    if (
+        machine_json is None
+        or process_json is None
+        or not fils
+    ):
+        auto_profiles = discover_bambu_profiles(
+            studio
+        )
 
-    fils = list(filament_jsons or [])
-    if fils:
-        cmd += ["--load-filaments", ";".join(str(x.resolve()) for x in fils)]
+        if machine_json is None:
+            machine_json = auto_profiles["machine"]
 
-    cmd.append(str(input_path))
+        if process_json is None:
+            process_json = auto_profiles["process"]
+
+        if not fils:
+            fils = [
+                auto_profiles["filament"]
+            ]
+
+    # BBL bundled presets commonly use inheritance/include chains.
+    # Materialize complete CLI-ready configs before invoking the slicer.
+    resolved = materialize_bambu_cli_profiles(
+        studio_exe=studio,
+        machine_json=Path(machine_json),
+        process_json=Path(process_json),
+        filament_jsons=[
+            Path(x)
+            for x in fils
+        ],
+        cache_dir=(
+            output_path.parent
+            / ".nl_am_bambu_cli_profiles"
+        ),
+    )
+
+    machine_json = Path(
+        resolved["machine"]
+    ).resolve()
+
+    process_json = Path(
+        resolved["process"]
+    ).resolve()
+
+    fils = [
+        Path(x).resolve()
+        for x in resolved["filaments"]
+    ]
+
+    if not fils:
+        raise DeveloperBackendError(
+            "No resolved filament profile is available."
+        )
+
+    settings_arg = ";".join(
+        (
+            str(machine_json),
+            str(process_json),
+        )
+    )
+
+    filaments_arg = ";".join(
+        str(x)
+        for x in fils
+    )
+
+    # Exact-output contract: never accept an older neighbouring artifact.
+    try:
+        output_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    cmd: list[str] = [
+        str(studio),
+    ]
+
+    # Bambu Studio CLI preparation is required for raw model inputs.
+    #
+    # Current Windows Bambu Studio 2.7.x parsing requires a value for
+    # --orient on the target installation, hence "--orient", "1".
+    #
+    # Existing configured 3MF input is not automatically re-oriented.
+    if input_path.suffix.lower() != ".3mf":
+        cmd.extend(
+            [
+                "--orient", "1",
+                "--arrange", "1",
+                "--ensure-on-bed",
+            ]
+        )
+
+    cmd.extend(
+        [
+            "--load-settings",
+            settings_arg,
+
+            "--load-filaments",
+            filaments_arg,
+
+            "--slice",
+            "0",
+
+            "--debug",
+            "5",
+
+            "--export-3mf",
+            str(output_path),
+
+            str(input_path),
+        ]
+    )
 
     creationflags = 0
-    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
-        creationflags = subprocess.CREATE_NO_WINDOW
+    startupinfo = None
+
+    if os.name == "nt":
+        if hasattr(
+            subprocess,
+            "CREATE_NO_WINDOW",
+        ):
+            creationflags |= (
+                subprocess.CREATE_NO_WINDOW
+            )
+
+        if hasattr(
+            subprocess,
+            "STARTUPINFO",
+        ):
+            startupinfo = (
+                subprocess.STARTUPINFO()
+            )
+
+            if hasattr(
+                subprocess,
+                "STARTF_USESHOWWINDOW",
+            ):
+                startupinfo.dwFlags |= (
+                    subprocess.STARTF_USESHOWWINDOW
+                )
+
+            if hasattr(
+                subprocess,
+                "SW_HIDE",
+            ):
+                startupinfo.wShowWindow = (
+                    subprocess.SW_HIDE
+                )
 
     started = time.time()
+
     proc = subprocess.run(
         cmd,
         cwd=str(output_path.parent),
@@ -199,32 +466,83 @@ def slice_with_bambu_cli(
         errors="replace",
         timeout=1800,
         creationflags=creationflags,
+        startupinfo=startupinfo,
     )
 
-    if proc.returncode != 0:
+    def _tail(
+        value: str | None,
+        limit: int = 3000,
+    ) -> str:
+        if not value:
+            return ""
+        return value[-limit:]
+
+    raw_returncode = int(
+        proc.returncode
+    )
+
+    signed_returncode = (
+        raw_returncode - 2**32
+        if raw_returncode >= 2**31
+        else raw_returncode
+    )
+
+    if raw_returncode != 0:
         raise DeveloperBackendError(
             "Bambu Studio CLI slicing failed.\n"
-            f"returncode={proc.returncode}\n"
-            f"stdout_tail={proc.stdout[-3000:]}\n"
-            f"stderr_tail={proc.stderr[-3000:]}"
+            f"returncode_raw={raw_returncode}\n"
+            f"returncode_signed={signed_returncode}\n"
+            f"command={cmd!r}\n"
+            f"stdout_tail={_tail(proc.stdout)}\n"
+            f"stderr_tail={_tail(proc.stderr)}"
         )
 
-    # Some builds may place the file in outputdir using the requested basename.
     if not output_path.is_file():
-        alt = output_path.parent / output_path.name
-        if alt.is_file():
-            output_path = alt
+        raise DeveloperBackendError(
+            "Bambu Studio reported success but the exact requested "
+            "sliced .gcode.3mf was not created.\n"
+            f"expected={output_path}\n"
+            f"command={cmd!r}\n"
+            f"stdout_tail={_tail(proc.stdout)}\n"
+            f"stderr_tail={_tail(proc.stderr)}"
+        )
 
-    artifact = inspect_gcode_3mf(output_path)
+    artifact = inspect_gcode_3mf(
+        output_path
+    )
+
     return {
         "status": "slice_complete",
+        "pipeline": "bambu_single_stage_cli_v1",
         "studio_exe": str(studio),
         "command": cmd,
-        "elapsed_seconds": round(time.time() - started, 3),
+        "elapsed_seconds": round(
+            time.time() - started,
+            3,
+        ),
+        "returncode_raw": raw_returncode,
+        "returncode_signed": signed_returncode,
         "artifact": artifact,
-        "stdout_tail": proc.stdout[-2000:],
-        "stderr_tail": proc.stderr[-2000:],
+        "resolved_machine_json": str(
+            machine_json
+        ),
+        "resolved_process_json": str(
+            process_json
+        ),
+        "resolved_filament_jsons": [
+            str(x)
+            for x in fils
+        ],
+        "stdout_tail": _tail(
+            proc.stdout,
+            2000,
+        ),
+        "stderr_tail": _tail(
+            proc.stderr,
+            2000,
+        ),
     }
+
 
 
 def _retr_remote_bytes(
@@ -253,6 +571,8 @@ def _ftps_upload_verified(
     access_code: str,
     *,
     remote_name: str | None = None,
+    project_root: Path | None = None,
+    identity_request_id: str | None = None,
 ) -> dict[str, Any]:
     from am_print_executor import ftps_probe_v32 as ftps
 
@@ -260,7 +580,26 @@ def _ftps_upload_verified(
         raise DeveloperBackendError("Access Code cannot be empty.")
 
     artifact = inspect_gcode_3mf(artifact_path)
-    identity = ftps.load_gate1_identity(PROJECT_ROOT, REQUEST_ID)
+    effective_project_root = Path(
+        project_root if project_root is not None else PROJECT_ROOT
+    ).expanduser().resolve()
+
+    effective_identity_request_id = str(
+        identity_request_id if identity_request_id is not None else REQUEST_ID
+    ).strip()
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}",
+        effective_identity_request_id,
+    ):
+        raise DeveloperBackendError(
+            "Invalid device identity request ID."
+        )
+
+    identity = ftps.load_gate1_identity(
+        effective_project_root,
+        effective_identity_request_id,
+    )
     if identity["device_id"] != EXPECTED_DEVICE_ID:
         raise DeveloperBackendError("Locked X1C DEVICE_ID mismatch.")
 
@@ -340,6 +679,8 @@ def _ftps_upload_verified(
             "remote_size_bytes": remote_size,
             "reused_existing_remote": reused,
             "gcode_entries": artifact["gcode_entries"],
+            "device_evidence_project_root": str(effective_project_root),
+            "device_evidence_request_id": effective_identity_request_id,
         }
     finally:
         try:
@@ -465,23 +806,29 @@ def build_project_file_payload(
         raise DeveloperBackendError("Invalid plate gcode entry.")
 
     if use_ams:
-        if not ams_mapping:
+        if ams_mapping is None:
             raise DeveloperBackendError(
-                "AMS printing requires an explicit --ams-mapping. Slot mapping is never auto-guessed."
+                "AMS printing requires an explicit "
+                "--ams-mapping. Slot mapping is never "
+                "auto-guessed."
             )
-        if not all(isinstance(x, int) and -1 <= x <= 255 for x in ams_mapping):
-            raise DeveloperBackendError("AMS mapping must contain integers between -1 and 255.")
-        # V11.2.0 X1/P1/A1 raw MQTT mapping rule.
-        # Keep project filament order; pad unused positions to legacy length 5.
-        # Emit a real JSON array via json.dumps(payload), NOT a nested JSON string.
-        if len(ams_mapping) > 5:
-            raise DeveloperBackendError("X1C AMS mapping cannot exceed 5 project positions.")
-        mapping_value: Any = list(ams_mapping) + [-1] * (5 - len(ams_mapping))
+
+        try:
+            # The caller supplies logical project-filament
+            # order only. This device layer is the sole place
+            # that generates X1/P1/A1 -1 wire padding.
+            mapping_value: Any = to_x1c_wire_mapping(
+                ams_mapping
+            )
+        except AmsMappingError as exc:
+            raise DeveloperBackendError(
+                str(exc)
+            ) from exc
+
     else:
-        # Bambu Studio represents the external spool as
-        # a virtual tray. For the legacy X1/P1 mapping,
-        # external-spool project filaments are encoded as -1.
-        mapping_value = [-1]
+        # External spool is a device-wire concern and is
+        # intentionally represented as the legacy virtual tray.
+        mapping_value = external_spool_wire_mapping()
 
     return {
         "print": {
@@ -831,6 +1178,18 @@ def main() -> int:
     p_print.add_argument("--use-ams", action="store_true")
     p_print.add_argument("--ams-mapping")
     p_print.add_argument("--confirm-start", action="store_true")
+    p_print.add_argument(
+        "--project-root",
+        default=str(PROJECT_ROOT),
+    )
+    p_print.add_argument(
+        "--job-request-id",
+        required=True,
+    )
+    p_print.add_argument(
+        "--device-evidence-request-id",
+        default=REQUEST_ID,
+    )
 
     p_full = sub.add_parser("full")
     p_full.add_argument("input")
@@ -843,6 +1202,18 @@ def main() -> int:
     p_full.add_argument("--use-ams", action="store_true")
     p_full.add_argument("--ams-mapping")
     p_full.add_argument("--confirm-start", action="store_true")
+    p_full.add_argument(
+        "--project-root",
+        default=str(PROJECT_ROOT),
+    )
+    p_full.add_argument(
+        "--job-request-id",
+        required=True,
+    )
+    p_full.add_argument(
+        "--device-evidence-request-id",
+        default=REQUEST_ID,
+    )
 
     args = parser.parse_args()
 
@@ -868,6 +1239,38 @@ def main() -> int:
         return 0
 
     if args.command in {"print", "full"}:
+        project_root = Path(
+            args.project_root
+        ).expanduser().resolve()
+
+        job_request_id = str(
+            args.job_request_id
+        ).strip()
+
+        device_evidence_request_id = str(
+            args.device_evidence_request_id
+        ).strip()
+
+        request_id_pattern = (
+            r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}"
+        )
+
+        if not re.fullmatch(
+            request_id_pattern,
+            job_request_id,
+        ):
+            raise DeveloperBackendError(
+                "Invalid --job-request-id."
+            )
+
+        if not re.fullmatch(
+            request_id_pattern,
+            device_evidence_request_id,
+        ):
+            raise DeveloperBackendError(
+                "Invalid --device-evidence-request-id."
+            )
+
         if not args.confirm_start:
             raise DeveloperBackendError(
                 "Real print start is blocked. The caller must explicitly set --confirm-start."
@@ -894,6 +1297,8 @@ def main() -> int:
             artifact_path,
             access_code,
             remote_name=args.remote_name,
+            project_root=project_root,
+            identity_request_id=device_evidence_request_id,
         )
 
         start = _mqtt_start_once(
@@ -909,6 +1314,11 @@ def main() -> int:
             "version": "10.0.0",
             "stage": "developer_mode_backend_direct_print",
             "created_unix": time.time(),
+            "runtime_context": {
+                "project_root": str(project_root),
+                "job_request_id": job_request_id,
+                "device_evidence_request_id": device_evidence_request_id,
+            },
             "slice": slice_result,
             "upload": upload,
             "start": start,
@@ -917,7 +1327,16 @@ def main() -> int:
         }
 
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        report_path = TASK_DIR / f"m4_developer_backend_live_{stamp}.json"
+        report_task_dir = (
+            project_root
+            / "outputs"
+            / "m4"
+            / job_request_id
+        )
+        report_path = (
+            report_task_dir
+            / f"m4_developer_backend_live_{stamp}.json"
+        )
         _write_json(report_path, result)
 
         print(json.dumps(result, ensure_ascii=False, indent=2))
