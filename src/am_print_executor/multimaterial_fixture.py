@@ -4,9 +4,12 @@ import argparse
 import copy
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
+
+from am_print_executor.bambu_headless_cli import (
+    run_bambu_cli,
+)
 
 
 DEFAULT_GRAY = "#A6A9AA"
@@ -208,33 +211,18 @@ def probe_studio_cli(
             f"Bambu Studio missing: {studio_exe}"
         )
 
-    creationflags = 0
-
-    if hasattr(
-        subprocess,
-        "CREATE_NO_WINDOW",
-    ):
-        creationflags = (
-            subprocess.CREATE_NO_WINDOW
-        )
-
-    proc = subprocess.run(
+    cli_result = run_bambu_cli(
         [
             str(studio_exe),
             "--help",
         ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=60,
-        creationflags=creationflags,
     )
 
     text = (
-        (proc.stdout or "")
+        cli_result.stdout
         + "\n"
-        + (proc.stderr or "")
+        + cli_result.stderr
     )
 
     flags = {
@@ -275,7 +263,7 @@ def probe_studio_cli(
     )
 
     return {
-        "return_code": proc.returncode,
+        "return_code": cli_result.raw_exit,
         "flags": flags,
         "documented_core_ready":
             documented_core_ready,

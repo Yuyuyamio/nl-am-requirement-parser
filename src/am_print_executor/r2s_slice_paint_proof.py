@@ -3,9 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
-import subprocess
 import time
 import zipfile
 import xml.etree.ElementTree as ET
@@ -16,6 +14,9 @@ from typing import Any
 
 from am_print_executor import multimaterial_project as mm
 from am_print_executor import developer_mode_backend_v1120 as backend
+from am_print_executor.bambu_headless_cli import (
+    run_bambu_cli,
+)
 from am_print_executor.surface_painted_multimaterial_project import (
     inspect_paint,
 )
@@ -273,12 +274,6 @@ def build_slice_command(
         str(output_gcode),
         str(input_project),
     ]
-
-
-def creationflags() -> int:
-    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
-        return subprocess.CREATE_NO_WINDOW
-    return 0
 
 
 def color_norm(value: Any) -> str:
@@ -582,32 +577,24 @@ def run_slice_paint_proof(
 
     started = time.time()
 
-    proc = subprocess.run(
+    cli_result = run_bambu_cli(
         command,
+        expected_outputs=[output_gcode],
         cwd=str(output_gcode.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=900,
-        creationflags=creationflags(),
     )
 
-    raw_rc = int(proc.returncode)
-    signed_rc = mm._signed_return_code(raw_rc)
+    raw_rc = cli_result.raw_exit
+    signed_rc = cli_result.signed_exit
 
-    if signed_rc != 0:
+    if not cli_result.success:
         raise SlicePaintProofError(
             "Bambu post-paint slicing failed.\n"
             f"returncode_raw={raw_rc}\n"
             f"returncode_signed={signed_rc}\n"
-            f"stdout_tail={proc.stdout[-4000:]}\n"
-            f"stderr_tail={proc.stderr[-4000:]}"
-        )
-
-    if not output_gcode.is_file():
-        raise SlicePaintProofError(
-            "Bambu returned success but exact requested G-code 3MF does not exist."
+            f"outputs_exist={cli_result.outputs_exist}\n"
+            f"stdout_tail={cli_result.stdout[-4000:]}\n"
+            f"stderr_tail={cli_result.stderr[-4000:]}"
         )
 
     input_sha_after = sha256_file(input_project)
@@ -730,10 +717,10 @@ def run_slice_paint_proof(
                 ),
 
             "stdout_tail":
-                proc.stdout[-3000:],
+                cli_result.stdout[-3000:],
 
             "stderr_tail":
-                proc.stderr[-3000:],
+                cli_result.stderr[-3000:],
         },
 
         "gcode":

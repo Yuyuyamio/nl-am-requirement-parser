@@ -4,10 +4,8 @@ import argparse
 import hashlib
 import json
 import math
-import os
 import re
 import shutil
-import subprocess
 import time
 import zipfile
 import xml.etree.ElementTree as ET
@@ -19,6 +17,10 @@ import numpy as np
 import trimesh
 
 from am_print_executor import multimaterial_project as mm
+from am_print_executor.bambu_auto_orient import (
+    BambuAutoOrientError,
+    auto_orient_with_bambu_cli,
+)
 from am_print_executor.rigid_multimaterial_project import (
     parse_3mf_leaves,
 )
@@ -218,16 +220,6 @@ def select_dorsal_accent_triangles(
     }
 
 
-def _creationflags() -> int:
-    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
-        return subprocess.CREATE_NO_WINDOW
-    return 0
-
-
-def _signed_return_code(raw: int) -> int:
-    return mm._signed_return_code(int(raw))
-
-
 def run_intact_auto_orient(
     *,
     studio_exe: Path,
@@ -238,57 +230,29 @@ def run_intact_auto_orient(
     filament_paths: list[Path],
     build_plate: str,
 ) -> dict[str, Any]:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        output_path.unlink()
-    except FileNotFoundError:
-        pass
-
-    command = [
-        str(studio_exe),
-        "--orient", "1",
-        "--arrange", "1",
-        "--ensure-on-bed",
-        "--load-settings", f"{machine};{process}",
-        "--curr-bed-type", build_plate,
-        "--load-filaments", ";".join(str(path) for path in filament_paths),
-        "--debug", "5",
-        "--export-3mf", str(output_path),
-        str(source_model),
-    ]
-
     started = time.time()
 
-    proc = subprocess.run(
-        command,
-        cwd=str(output_path.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=600,
-        creationflags=_creationflags(),
-    )
-
-    raw_rc = int(proc.returncode)
-    signed_rc = _signed_return_code(raw_rc)
-
-    if signed_rc != 0:
+    try:
+        auto_orient = auto_orient_with_bambu_cli(
+            studio_exe=studio_exe,
+            source_model=source_model,
+            output_path=output_path,
+            machine_json=machine,
+            process_json=process,
+            filament_jsons=filament_paths,
+            build_plate=build_plate,
+            max_attempts=3,
+            timeout=600,
+        )
+    except BambuAutoOrientError as exc:
         raise SurfacePaintError(
             "Bambu intact-source Auto Orient failed.\n"
-            f"returncode_raw={raw_rc}\n"
-            f"returncode_signed={signed_rc}\n"
-            f"stdout_tail={proc.stdout[-3000:]}\n"
-            f"stderr_tail={proc.stderr[-3000:]}"
-        )
+            + str(exc)
+        ) from exc
 
-    if not output_path.is_file():
-        raise SurfacePaintError(
-            "Bambu Auto Orient returned success but exact 3MF output is missing."
-        )
-
-    xml_repair = mm.repair_bambu_model_settings_xml(output_path)
+    xml_repair = auto_orient[
+        "output"
+    ].get("xml_repair")
 
     from am_print_executor.bambu_project_xy_guard import (
         ProjectXYPlacementError,
@@ -309,9 +273,17 @@ def run_intact_auto_orient(
         )
 
     return {
-        "command": command,
-        "returncode_raw": raw_rc,
-        "returncode_signed": signed_rc,
+        "command": auto_orient["command"],
+        "returncode_raw": auto_orient[
+            "returncode_raw"
+        ],
+        "returncode_signed": auto_orient[
+            "returncode_signed"
+        ],
+        "attempt_count": auto_orient[
+            "attempt_count"
+        ],
+        "attempts": auto_orient["attempts"],
         "elapsed_seconds": round(time.time() - started, 3),
         "sha256": _sha256(output_path),
         "xml_repair": xml_repair,

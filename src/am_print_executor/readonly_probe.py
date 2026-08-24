@@ -5,7 +5,6 @@ import ipaddress
 import json
 import socket
 import ssl
-import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -13,17 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-try:
-    import paho.mqtt.client as mqtt
-except ImportError as exc:  # pragma: no cover - exercised by CLI guard
-    mqtt = None  # type: ignore[assignment]
-    _PAHO_IMPORT_ERROR = exc
-else:
-    _PAHO_IMPORT_ERROR = None
+from .x1c_connection import (
+    MQTT_PORT,
+    MQTT_USERNAME,
+    PrinterConnectionError,
+    connect_printer,
+)
 
 
-MQTT_PORT = 8883
-MQTT_USERNAME = "bblp"
 REQUEST_ID_DEFAULT = "M2-1E4B2301FADD"
 
 
@@ -234,110 +230,36 @@ def run_single_passive_attempt(
     *,
     timeout_seconds: float = 15.0,
 ) -> ProbeAttempt:
-    if mqtt is None:
-        raise ReadonlyProbeError(
-            "paho-mqtt is not installed. Run: python -m pip install paho-mqtt==2.1.0"
-        ) from _PAHO_IMPORT_ERROR
-
     started = time.monotonic()
-    message_event = threading.Event()
-    connected_event = threading.Event()
-    subscribed_event = threading.Event()
-    state: dict[str, Any] = {
-        "connected": False,
-        "subscribed": False,
-        "summary": None,
-        "error": None,
-    }
-    report_topic = f"device/{identity.serial_number}/report"
-
-    def on_connect(client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
-        code = int(reason_code)
-        if code != 0:
-            state["error"] = f"MQTT authentication/connection failed with reason code {code}."
-            message_event.set()
-            return
-        state["connected"] = True
-        connected_event.set()
-        result, _message_id = client.subscribe(report_topic, qos=0)
-        if result != mqtt.MQTT_ERR_SUCCESS:
-            state["error"] = f"MQTT subscribe failed with result {result}."
-            message_event.set()
-
-    def on_subscribe(client: Any, userdata: Any, mid: Any, reason_codes: Any, properties: Any) -> None:
-        state["subscribed"] = True
-        subscribed_event.set()
-
-    def on_message(client: Any, userdata: Any, message: Any) -> None:
-        try:
-            payload = json.loads(message.payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return
-        if not isinstance(payload, dict):
-            return
-        summary = extract_status_summary(payload)
-        if summary is None:
-            return
-        state["summary"] = summary
-        message_event.set()
-
-    def on_disconnect(client: Any, userdata: Any, disconnect_flags: Any, reason_code: Any, properties: Any) -> None:
-        if not message_event.is_set() and int(reason_code) != 0:
-            state["error"] = f"MQTT disconnected before a status report arrived: {reason_code}"
-            message_event.set()
-
-    client = mqtt.Client(
-        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-        client_id=f"m4-gate1-{uuid.uuid4().hex[:12]}",
-        protocol=mqtt.MQTTv311,
-        reconnect_on_failure=False,
-    )
-    client.username_pw_set(MQTT_USERNAME, access_code)
-    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    tls_context.check_hostname = False
-    tls_context.verify_mode = ssl.CERT_NONE
-    client.tls_set_context(tls_context)
-    client.tls_insecure_set(True)
-    client.on_connect = on_connect
-    client.on_subscribe = on_subscribe
-    client.on_message = on_message
-    client.on_disconnect = on_disconnect
-
     try:
-        client.connect(identity.ip_address, MQTT_PORT, keepalive=30)
-        client.loop_start()
-        message_event.wait(timeout_seconds)
-    except Exception as exc:  # paho raises several network-specific exceptions
-        state["error"] = f"MQTT probe exception: {type(exc).__name__}: {exc}"
-    finally:
-        try:
-            client.disconnect()
-        except Exception:
-            pass
-        try:
-            client.loop_stop()
-        except Exception:
-            pass
-
-    elapsed = round(time.monotonic() - started, 3)
-    success = bool(state["connected"] and state["subscribed"] and state["summary"])
-    if not success and state["error"] is None:
-        if not connected_event.is_set():
-            state["error"] = "Timed out before MQTT connection completed."
-        elif not subscribed_event.is_set():
-            state["error"] = "Timed out before MQTT subscription completed."
-        else:
-            state["error"] = "Connected and subscribed, but no X1C status report arrived."
-
+        status = connect_printer(
+            ip=identity.ip_address,
+            access_code=access_code,
+            device_id=identity.serial_number,
+            timeout_seconds=timeout_seconds,
+            attempts=1,
+        )
+    except PrinterConnectionError as exc:
+        partial = exc.partial_status
+        return ProbeAttempt(
+            attempt=0,
+            success=False,
+            connected=bool(partial and partial.connected),
+            subscribed=bool(partial and partial.subscribed),
+            message_received=False,
+            elapsed_seconds=round(time.monotonic() - started, 3),
+            error=f"{exc.code}: {exc}",
+            status_summary=None,
+        )
     return ProbeAttempt(
         attempt=0,
-        success=success,
-        connected=bool(state["connected"]),
-        subscribed=bool(state["subscribed"]),
-        message_received=state["summary"] is not None,
-        elapsed_seconds=elapsed,
-        error=state["error"],
-        status_summary=state["summary"],
+        success=True,
+        connected=status.connected,
+        subscribed=status.subscribed,
+        message_received=status.printer_state_observed,
+        elapsed_seconds=status.elapsed_seconds,
+        error=None,
+        status_summary=status.status_summary,
     )
 
 

@@ -1,0 +1,9 @@
+{
+  "source_job_id": "AUTO-20260824-161128-9EA75FD9",
+  "source_request": "给我打印一个3厘米高的卡通老鼠",
+  "source_artifact": "raw_model.glb",
+  "source_sha256": "77036a8a5be6bf308d8ad31f6354354eb2a7f0f9e1bf8705d1d9e66c1fc96fe0",
+  "manual_verdict": "curved_and_fragmented_build_plate_contact",
+  "normalization_scale_factor": 1.0,
+  "raw_and_normalized_sha256_equal": true
+}

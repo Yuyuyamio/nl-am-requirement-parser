@@ -39,6 +39,33 @@ class Gate1V31Tests(unittest.TestCase):
         self.assertFalse(FakeReasonCode(False).is_failure)
         self.assertTrue(FakeReasonCode(True).is_failure)
 
+    def test_passive_discover_reuses_public_connection_module(self) -> None:
+        status = type(
+            "Status",
+            (),
+            {
+                "connected": True,
+                "subscribed": True,
+                "printer_state_observed": True,
+                "device_id": "DEVICE123",
+                "status_summary": {"gcode_state": "IDLE"},
+                "elapsed_seconds": 0.1,
+            },
+        )()
+        with patch(
+            "am_print_executor.readonly_probe_autodiscovery_v31.connect_printer",
+            return_value=status,
+        ) as connector:
+            from am_print_executor.readonly_probe_autodiscovery_v31 import (
+                passive_discover,
+            )
+
+            result = passive_discover("172.16.61.6", "SUPERSECRET")
+        self.assertTrue(result.message_received)
+        self.assertEqual(result.device_id, "DEVICE123")
+        self.assertIsNone(result.error)
+        self.assertEqual(connector.call_count, 1)
+
     def test_success_writes_v31_report_without_secret(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp)

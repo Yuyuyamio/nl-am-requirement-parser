@@ -10,6 +10,12 @@ from typing import Any
 import trimesh
 from jsonschema import Draft202012Validator
 
+from am_print_executor.flat_base_gate import (
+    FlatBaseGateError,
+    ensure_flat_printing_base,
+    inspect_flat_printing_base,
+)
+
 from .artifacts import (
     ensure_valid_artifact_receipt,
 )
@@ -421,6 +427,262 @@ def _export_glb_atomic(
             pass
 
         raise
+
+
+def scale_mesh_to_target_height(
+    mesh: trimesh.Trimesh,
+    target_height_mm: float,
+    *,
+    relative_tolerance: float = 0.0,
+    absolute_tolerance_mm: float = 0.1,
+) -> tuple[
+    trimesh.Trimesh,
+    dict[str, Any],
+]:
+    """Uniformly scale a mesh so its Z extent is the requested height."""
+
+    if (
+        isinstance(target_height_mm, bool)
+        or not isinstance(
+            target_height_mm,
+            (int, float),
+        )
+        or not math.isfinite(
+            float(target_height_mm)
+        )
+        or float(target_height_mm) <= 0
+    ):
+        raise M2ProviderError(
+            "M2_NORMALIZATION_TARGET_HEIGHT_INVALID",
+            "目标高度必须是有限正数",
+            details={
+                "target_height_mm": target_height_mm,
+            },
+        )
+
+    if (
+        not math.isfinite(
+            float(absolute_tolerance_mm)
+        )
+        or float(absolute_tolerance_mm) < 0
+        or not math.isfinite(
+            float(relative_tolerance)
+        )
+        or float(relative_tolerance) < 0
+    ):
+        raise ValueError(
+            "height tolerances must be finite and non-negative"
+        )
+
+    extents_before = _extents_dict(mesh)
+    source_height_mm = float(mesh.extents[2])
+    target_height = float(target_height_mm)
+    scale_factor = target_height / source_height_mm
+
+    if (
+        not math.isfinite(scale_factor)
+        or scale_factor <= 0
+    ):
+        raise M2ProviderError(
+            "M2_NORMALIZATION_SCALE_INVALID",
+            "计算得到的缩放系数无效",
+            details={
+                "source_height_mm": source_height_mm,
+                "target_height_mm": target_height,
+                "scale_factor": scale_factor,
+            },
+        )
+
+    scaled_mesh = mesh.copy()
+    scaled_mesh.apply_scale(scale_factor)
+
+    bounds = scaled_mesh.bounds
+
+    if bounds is None or len(bounds) != 2:
+        raise M2ProviderError(
+            "M2_NORMALIZATION_BOUNDS_INVALID",
+            "缩放后无法获得模型边界",
+        )
+
+    minimum_z = float(bounds[0][2])
+
+    if not math.isfinite(minimum_z):
+        raise M2ProviderError(
+            "M2_NORMALIZATION_BOUNDS_INVALID",
+            "缩放后的模型边界无效",
+        )
+
+    scaled_mesh.apply_translation(
+        (0.0, 0.0, -minimum_z)
+    )
+
+    try:
+        scaled_mesh, flat_base_repair = ensure_flat_printing_base(
+            scaled_mesh,
+            layer_height_mm=0.2,
+        )
+    except FlatBaseGateError as error:
+        raise M2ProviderError(
+            "M2_FLAT_BASE_GATE_BLOCK",
+            "无法在局部修整范围内形成连续平整打印底面",
+            details=error.report,
+        ) from error
+
+    # Clipping removes only the unsafe curved tip, so restore the requested
+    # physical height with one final uniform scale. A preserved flat model
+    # takes this branch with correction_factor == 1 and is not modified.
+    clipped_height_mm = float(scaled_mesh.extents[2])
+    correction_factor = target_height / clipped_height_mm
+    if not math.isclose(
+        correction_factor,
+        1.0,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        scaled_mesh.apply_scale(correction_factor)
+        scaled_mesh.apply_translation(
+            (0.0, 0.0, -float(scaled_mesh.bounds[0, 2]))
+        )
+        scale_factor *= correction_factor
+
+    flat_base_report = inspect_flat_printing_base(scaled_mesh)
+    if not flat_base_report["base_flatness_passed"]:
+        raise M2ProviderError(
+            "M2_FLAT_BASE_GATE_BLOCK",
+            "尺寸恢复后打印底面不再满足平面硬约束",
+            details=flat_base_report,
+        )
+    flat_base_repair["after"] = flat_base_report
+
+    extents_after = _extents_dict(scaled_mesh)
+    actual_height_mm = float(
+        scaled_mesh.extents[2]
+    )
+
+    if not math.isclose(
+        actual_height_mm,
+        target_height,
+        rel_tol=float(relative_tolerance),
+        abs_tol=float(absolute_tolerance_mm),
+    ):
+        raise M2ProviderError(
+            "M2_NORMALIZATION_HEIGHT_MISMATCH",
+            "归一化后的高度不符合目标高度",
+            details={
+                "actual_height_mm": actual_height_mm,
+                "target_height_mm": target_height,
+                "difference_mm": abs(
+                    actual_height_mm
+                    - target_height
+                ),
+                "absolute_tolerance_mm": (
+                    float(absolute_tolerance_mm)
+                ),
+            },
+        )
+
+    return scaled_mesh, {
+        "source_height_mm": source_height_mm,
+        "target_height_mm": target_height,
+        "scale_factor": scale_factor,
+        "extents_before_mm": extents_before,
+        "extents_after_mm": extents_after,
+        "flat_base": flat_base_report,
+        "flat_base_repair": flat_base_repair,
+    }
+
+
+def export_glb_at_target_height(
+    source_model_path: str | Path,
+    destination_model_path: str | Path,
+    target_height_mm: float,
+    *,
+    absolute_tolerance_mm: float = 0.1,
+) -> dict[str, Any]:
+    """Create and round-trip verify a physical-size GLB artifact."""
+
+    source_path = Path(
+        source_model_path
+    ).expanduser().resolve()
+    destination_path = Path(
+        destination_model_path
+    ).expanduser().resolve()
+    source_mesh = _load_combined_mesh(
+        source_path
+    )
+    scaled_mesh, result = (
+        scale_mesh_to_target_height(
+            source_mesh,
+            target_height_mm,
+            relative_tolerance=0.0,
+            absolute_tolerance_mm=(
+                absolute_tolerance_mm
+            ),
+        )
+    )
+
+    destination_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    _export_glb_atomic(
+        scaled_mesh,
+        destination_path,
+    )
+
+    try:
+        roundtrip_mesh = _load_combined_mesh(
+            destination_path
+        )
+        roundtrip_extents = _extents_dict(
+            roundtrip_mesh
+        )
+        roundtrip_height_mm = float(
+            roundtrip_mesh.extents[2]
+        )
+
+        if (
+            abs(
+                roundtrip_height_mm
+                - float(target_height_mm)
+            )
+            > float(absolute_tolerance_mm)
+        ):
+            raise M2ProviderError(
+                "M2_NORMALIZATION_ROUNDTRIP_HEIGHT_MISMATCH",
+                "GLB回读高度不符合目标高度",
+                details={
+                    "actual_height_mm": (
+                        roundtrip_height_mm
+                    ),
+                    "target_height_mm": (
+                        float(target_height_mm)
+                    ),
+                    "difference_mm": abs(
+                        roundtrip_height_mm
+                        - float(target_height_mm)
+                    ),
+                    "absolute_tolerance_mm": (
+                        float(absolute_tolerance_mm)
+                    ),
+                },
+            )
+    except Exception:
+        destination_path.unlink(
+            missing_ok=True
+        )
+        raise
+
+    return {
+        **result,
+        "extents_after_roundtrip_mm": (
+            roundtrip_extents
+        ),
+        "height_error_mm": abs(
+            roundtrip_height_mm
+            - float(target_height_mm)
+        ),
+    }
 
 
 def _updated_manifest(
@@ -867,100 +1129,26 @@ def _normalize_m2_model_impl(
     mesh = _load_combined_mesh(
         source_model_path
     )
-
-    extents_before = _extents_dict(
-        mesh
-    )
-
-    source_height_mm = (
-        extents_before["z"]
-    )
-
-    scale_factor = (
-        target_height_mm
-        / source_height_mm
-    )
-
-    if (
-        not math.isfinite(scale_factor)
-        or scale_factor <= 0
-    ):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_SCALE_INVALID",
-            "计算得到的缩放系数无效",
-            details={
-                "source_height_mm": (
-                    source_height_mm
-                ),
-                "target_height_mm": (
-                    target_height_mm
-                ),
-                "scale_factor": (
-                    scale_factor
-                ),
-            },
-        )
-
-    normalized_mesh = mesh.copy()
-
-    normalized_mesh.apply_scale(
-        scale_factor
-    )
-
-    bounds = normalized_mesh.bounds
-
-    if (
-        bounds is None
-        or len(bounds) != 2
-    ):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_BOUNDS_INVALID",
-            "缩放后无法获得模型边界",
-        )
-
-    minimum_z = float(
-        bounds[0][2]
-    )
-
-    if not math.isfinite(
-        minimum_z
-    ):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_BOUNDS_INVALID",
-            "缩放后的模型边界无效",
-        )
-
-    # 将模型底面移动到z=0。
-    normalized_mesh.apply_translation(
-        (
-            0.0,
-            0.0,
-            -minimum_z,
+    normalized_mesh, scale_result = (
+        scale_mesh_to_target_height(
+            mesh,
+            target_height_mm,
+            relative_tolerance=1e-6,
+            absolute_tolerance_mm=1e-5,
         )
     )
-
-    extents_after = _extents_dict(
-        normalized_mesh
-    )
-
-    if not math.isclose(
-        extents_after["z"],
-        target_height_mm,
-        rel_tol=1e-6,
-        abs_tol=1e-5,
-    ):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_HEIGHT_MISMATCH",
-            "归一化后的高度不符合目标高度",
-            details={
-                "actual_height_mm": (
-                    extents_after["z"]
-                ),
-                "target_height_mm": (
-                    target_height_mm
-                ),
-            },
-        )
+    extents_before = scale_result[
+        "extents_before_mm"
+    ]
+    extents_after = scale_result[
+        "extents_after_mm"
+    ]
+    source_height_mm = scale_result[
+        "source_height_mm"
+    ]
+    scale_factor = scale_result[
+        "scale_factor"
+    ]
 
     _export_glb_atomic(
         normalized_mesh,
@@ -1532,105 +1720,26 @@ def _normalize_repaired_m2_model(
     mesh = _load_combined_mesh(
         source_model_path
     )
-    extents_before = _extents_dict(mesh)
-
-    # GATE8C_PRECISE_REPAIRED_HEIGHT_SCALING_V2
-    # Use the full-precision mesh extent for scaling.
-    source_height_mm = float(
-        mesh.extents[2]
-    )
-
-    if (
-        not math.isfinite(source_height_mm)
-        or source_height_mm <= 0
-    ):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_EXTENTS_INVALID",
-            "修复模型高度无效",
-            details={
-                "source_height_mm": (
-                    source_height_mm
-                ),
-            },
+    normalized_mesh, scale_result = (
+        scale_mesh_to_target_height(
+            mesh,
+            target_height_mm,
+            relative_tolerance=1e-9,
+            absolute_tolerance_mm=1e-6,
         )
-
-    scale_factor = (
-        target_height_mm / source_height_mm
     )
-
-    if (
-        not math.isfinite(scale_factor)
-        or scale_factor <= 0
-    ):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_SCALE_INVALID",
-            "计算得到的缩放系数无效",
-            details={
-                "source_height_mm": (
-                    source_height_mm
-                ),
-                "target_height_mm": (
-                    target_height_mm
-                ),
-                "scale_factor": scale_factor,
-            },
-        )
-
-    normalized_mesh = mesh.copy()
-    normalized_mesh.apply_scale(
-        scale_factor
-    )
-
-    bounds = normalized_mesh.bounds
-
-    if bounds is None or len(bounds) != 2:
-        raise M2ProviderError(
-            "M2_NORMALIZATION_BOUNDS_INVALID",
-            "缩放后无法获得模型边界",
-        )
-
-    minimum_z = float(bounds[0][2])
-
-    if not math.isfinite(minimum_z):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_BOUNDS_INVALID",
-            "缩放后的模型边界无效",
-        )
-
-    normalized_mesh.apply_translation(
-        (0.0, 0.0, -minimum_z)
-    )
-
-    extents_after = _extents_dict(
-        normalized_mesh
-    )
-
-    actual_height_mm = float(
-        normalized_mesh.extents[2]
-    )
-
-    if not math.isclose(
-        actual_height_mm,
-        target_height_mm,
-        rel_tol=1e-9,
-        abs_tol=1e-6,
-    ):
-        raise M2ProviderError(
-            "M2_NORMALIZATION_HEIGHT_MISMATCH",
-            "归一化后的高度不符合目标高度",
-            details={
-                "actual_height_mm": (
-                    actual_height_mm
-                ),
-                "target_height_mm": (
-                    target_height_mm
-                ),
-                "difference_mm": abs(
-                    actual_height_mm
-                    - target_height_mm
-                ),
-            },
-        )
+    extents_before = scale_result[
+        "extents_before_mm"
+    ]
+    extents_after = scale_result[
+        "extents_after_mm"
+    ]
+    source_height_mm = scale_result[
+        "source_height_mm"
+    ]
+    scale_factor = scale_result[
+        "scale_factor"
+    ]
 
     _export_glb_atomic(
         normalized_mesh,

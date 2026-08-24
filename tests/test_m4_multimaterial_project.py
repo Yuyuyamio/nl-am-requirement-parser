@@ -4,7 +4,6 @@ import unittest
 import zipfile
 
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 import am_print_executor.multimaterial_project as p
@@ -129,6 +128,53 @@ class MultiMaterialProjectTests(
         return task
 
 
+    def auto_orient_result(
+        self,
+        kwargs,
+    ):
+        command = [
+            str(kwargs["studio_exe"]),
+            "--orient", "1",
+            "--arrange", "1",
+            "--ensure-on-bed",
+            *kwargs.get("extra_options", ()),
+            "--load-settings",
+            f"{kwargs['machine_json']};{kwargs['process_json']}",
+            "--curr-bed-type",
+            kwargs["build_plate"],
+            "--load-filaments",
+            ";".join(
+                str(path)
+                for path in kwargs["filament_jsons"]
+            ),
+            "--load-assemble-list",
+            str(kwargs["assemble_list"]),
+            "--debug", "5",
+            "--export-3mf",
+            str(kwargs["output_path"]),
+        ]
+
+        return {
+            "command": command,
+            "returncode_raw": 0,
+            "returncode_signed": 0,
+            "attempt_count": 1,
+            "attempts": [
+                {
+                    "stdout_tail": "",
+                    "stderr_tail": "",
+                }
+            ],
+            "output": {
+                "path": str(kwargs["output_path"]),
+                "xml_repair": {
+                    "status": "test_fixture_skip",
+                    "repaired": False,
+                },
+            },
+        }
+
+
     def test_assemble_payload_maps_two_objects(
         self,
     ):
@@ -249,10 +295,7 @@ class MultiMaterialProjectTests(
                 / "out.project.3mf"
             )
 
-            def fake_run(
-                cmd,
-                **kwargs,
-            ):
+            def fake_auto(**kwargs):
                 with zipfile.ZipFile(
                     output,
                     "w",
@@ -276,10 +319,8 @@ class MultiMaterialProjectTests(
                         ),
                     )
 
-                return SimpleNamespace(
-                    returncode=0,
-                    stdout="",
-                    stderr="",
+                return self.auto_orient_result(
+                    kwargs
                 )
 
             with (
@@ -327,10 +368,10 @@ class MultiMaterialProjectTests(
                 ),
 
                 mock.patch.object(
-                    p.subprocess,
-                    "run",
+                    p,
+                    "auto_orient_with_bambu_cli",
                     side_effect=
-                        fake_run,
+                        fake_auto,
                 ),
             ):
                 result = (
@@ -424,13 +465,11 @@ class MultiMaterialProjectTests(
                 ),
 
                 mock.patch.object(
-                    p.subprocess,
-                    "run",
-                    return_value=
-                        SimpleNamespace(
-                            returncode=1,
-                            stdout="",
-                            stderr="fail",
+                    p,
+                    "auto_orient_with_bambu_cli",
+                    side_effect=
+                        p.BambuAutoOrientError(
+                            "native failure"
                         ),
                 ),
             ):
@@ -528,11 +567,11 @@ class MultiMaterialProjectTests(
 
             seen = {}
 
-            def fake_run(
-                cmd,
-                **kwargs,
-            ):
-                seen["cmd"] = list(cmd)
+            def fake_auto(**kwargs):
+                result = self.auto_orient_result(
+                    kwargs
+                )
+                seen["cmd"] = result["command"]
 
                 with zipfile.ZipFile(
                     output,
@@ -557,11 +596,7 @@ class MultiMaterialProjectTests(
                         ),
                     )
 
-                return SimpleNamespace(
-                    returncode=0,
-                    stdout="",
-                    stderr="",
-                )
+                return result
 
             with (
                 # TEST_FIXTURE_POSTPROCESS_ISOLATION
@@ -597,9 +632,9 @@ class MultiMaterialProjectTests(
                     },
                 ),
                 mock.patch.object(
-                    p.subprocess,
-                    "run",
-                    side_effect=fake_run,
+                    p,
+                    "auto_orient_with_bambu_cli",
+                    side_effect=fake_auto,
                 ),
             ):
                 result = p.assemble_project(

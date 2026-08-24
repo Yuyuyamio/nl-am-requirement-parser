@@ -17,6 +17,9 @@ from am_print_executor.bambu_headless_cli import (
 from am_print_executor.gcode_printability_gate import (
     inspect_final_gcode_printability,
 )
+from am_print_executor.flat_base_gate import (
+    inspect_flat_printing_base,
+)
 from am_print_executor.multimaterial_project import (
     repair_bambu_model_settings_xml,
 )
@@ -181,6 +184,13 @@ def export_orientation_candidates(
             mesh
         )
 
+        # Orientation search may rotate a previously protected planar base
+        # away from the bed. Reject that candidate instead of treating one
+        # lowest point or a curved surface as a valid placement.
+        flat_base = inspect_flat_printing_base(mesh)
+        if not flat_base["base_flatness_passed"]:
+            continue
+
         candidate_path = (
             work_dir
             / (
@@ -241,10 +251,12 @@ def export_orientation_candidates(
                 ),
 
             "bed_contact_area_mm2":
-                record.get(
-                    "bed_contact_area_mm2",
-                    0.0,
-                ),
+                flat_base[
+                    "bed_contact_area_mm2"
+                ],
+
+            "flat_base":
+                flat_base,
 
             "overhang_area_mm2":
                 record.get(
@@ -658,7 +670,8 @@ def optimize_printability(
 
             gate = (
                 inspect_final_gcode_printability(
-                    artifact
+                    artifact,
+                    geometry_path=orientation_path,
                 )
             )
 

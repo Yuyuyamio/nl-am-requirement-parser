@@ -2,12 +2,15 @@
 
 import argparse
 import json
-import subprocess
 import time
 import zipfile
 
 from pathlib import Path
 from typing import Any
+
+from am_print_executor.bambu_headless_cli import (
+    run_bambu_cli,
+)
 
 
 class SlicePreflightError(RuntimeError):
@@ -222,33 +225,17 @@ def run_direct_project_slice(
         str(project_path),
     ]
 
-    creationflags = 0
-
-    if (
-        hasattr(
-            subprocess,
-            "CREATE_NO_WINDOW",
-        )
-    ):
-        creationflags = (
-            subprocess.CREATE_NO_WINDOW
-        )
-
     started = time.time()
 
-    proc = subprocess.run(
+    cli_result = run_bambu_cli(
         command,
+        expected_outputs=[output_path],
         cwd=str(output_path.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=timeout_seconds,
-        creationflags=creationflags,
     )
 
     exit_info = classify_bambu_exit_code(
-        proc.returncode
+        cli_result.raw_exit
     )
 
     output_exists = (
@@ -289,10 +276,10 @@ def run_direct_project_slice(
             succeeded,
 
         "stdout_tail":
-            proc.stdout[-4000:],
+            cli_result.stdout[-4000:],
 
         "stderr_tail":
-            proc.stderr[-4000:],
+            cli_result.stderr[-4000:],
 
         "network_used":
             False,

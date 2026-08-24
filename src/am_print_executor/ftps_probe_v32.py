@@ -10,6 +10,7 @@ import secrets
 import socket
 import ssl
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -43,7 +44,14 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        for attempt in range(10):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(min(0.01 * (2**attempt), 0.2))
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -122,6 +130,7 @@ def validate_or_create_ftps_pin(
     device_id: str,
     fingerprint: str,
     confirmation_reader: Callable[[str], str] = input,
+    trusted_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     # Reuse the successful certificate pin from v3.1 if it exists.
     old_pin = task_dir / "m4_gate2_ftps_tls_pin_v31.json"
@@ -141,14 +150,22 @@ def validate_or_create_ftps_pin(
                 )
             return pin
 
-    suffix = compact[-8:]
-    print("\nFIRST-CONNECTION FTPS TLS FINGERPRINT")
-    print(_format_fp(compact))
-    entered = confirmation_reader(
-        f"Type the final 8 characters {suffix} to pin this FTPS certificate: "
-    ).strip().replace(":", "").upper()
-    if entered != suffix:
-        raise Gate2V32Error("FTPS TLS fingerprint confirmation failed.")
+    if trusted_fingerprint is not None:
+        trusted = trusted_fingerprint.replace(":", "").upper()
+        if trusted != compact:
+            raise Gate2V32Error(
+                "FTPS TLS certificate does not match the authenticated "
+                "MQTT printer connection."
+            )
+    else:
+        suffix = compact[-8:]
+        print("\nFIRST-CONNECTION FTPS TLS FINGERPRINT")
+        print(_format_fp(compact))
+        entered = confirmation_reader(
+            f"Type the final 8 characters {suffix} to pin this FTPS certificate: "
+        ).strip().replace(":", "").upper()
+        if entered != suffix:
+            raise Gate2V32Error("FTPS TLS fingerprint confirmation failed.")
 
     pin = {
         "schema_version": "0.1.0",

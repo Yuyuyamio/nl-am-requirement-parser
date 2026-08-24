@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -20,6 +21,10 @@ from .base import (
 
 _JOB_ID_PATTERN = re.compile(
     r"^triposg-local-[0-9a-f]{16}$"
+)
+
+_PHYSICAL_MODEL_FILENAME = (
+    "generated_model_mm.glb"
 )
 
 
@@ -313,6 +318,31 @@ class TripoSGLocalProvider(GenerationProvider):
                 },
             )
 
+        target_height_mm = (
+            request.target_height_mm
+        )
+        if (
+            isinstance(target_height_mm, bool)
+            or not isinstance(
+                target_height_mm,
+                (int, float),
+            )
+            or not math.isfinite(
+                float(target_height_mm)
+            )
+            or float(target_height_mm) <= 0
+        ):
+            raise M2ProviderError(
+                "M2_TRIPOSG_LOCAL_TARGET_HEIGHT_INVALID",
+                "TripoSG本地生成必须提供有效目标高度",
+                details={
+                    "target_height_mm": (
+                        target_height_mm
+                    ),
+                    "network_called": False,
+                },
+            )
+
     def submit(
         self,
         request: CreativeGenerationRequest,
@@ -353,6 +383,10 @@ class TripoSGLocalProvider(GenerationProvider):
         model_windows_path = (
             windows_job_directory
             / "generated_model.glb"
+        )
+        physical_model_windows_path = (
+            windows_job_directory
+            / _PHYSICAL_MODEL_FILENAME
         )
         reference_wsl_path = str(
             PurePosixPath(
@@ -464,6 +498,56 @@ class TripoSGLocalProvider(GenerationProvider):
                 },
             )
 
+        from ..normalization import (
+            export_glb_at_target_height,
+        )
+
+        try:
+            target_size_result = (
+                export_glb_at_target_height(
+                    model_windows_path,
+                    physical_model_windows_path,
+                    float(request.target_height_mm),
+                    absolute_tolerance_mm=0.1,
+                )
+            )
+        except Exception as error:
+            physical_model_windows_path.unlink(
+                missing_ok=True
+            )
+            details = {
+                "source_path": str(
+                    model_windows_path
+                ),
+                "destination_path": str(
+                    physical_model_windows_path
+                ),
+                "target_height_mm": (
+                    request.target_height_mm
+                ),
+                "error_type": (
+                    type(error).__name__
+                ),
+                "reason": str(error),
+                "network_called": False,
+            }
+            if isinstance(
+                error,
+                M2ProviderError,
+            ):
+                details[
+                    "normalization_error_code"
+                ] = error.code
+                details[
+                    "normalization_error_details"
+                ] = error.details
+
+            raise M2ProviderError(
+                "M2_TRIPOSG_LOCAL_TARGET_SIZE_FAILED",
+                "TripoSG本地模型未能恢复目标物理尺寸",
+                details=details,
+            ) from error
+
         artifact_uri = (
             f"triposg-local://{provider_job_id}"
             "/model.glb"
@@ -489,12 +573,18 @@ class TripoSGLocalProvider(GenerationProvider):
                     reference_windows_path
                 ),
                 "generated_model_path": str(
+                    physical_model_windows_path
+                ),
+                "raw_generated_model_path": str(
                     model_windows_path
                 ),
                 "reference_worker": t2i_result.payload,
                 "triposg_worker": triposg_result.payload,
                 "target_height_mm": (
                     request.target_height_mm
+                ),
+                "target_size_postprocess": (
+                    target_size_result
                 ),
             },
         )
@@ -556,7 +646,7 @@ class TripoSGLocalProvider(GenerationProvider):
             self._job_windows_directory(
                 parsed.netloc
             )
-            / "generated_model.glb"
+            / _PHYSICAL_MODEL_FILENAME
         )
 
     def download_artifact(

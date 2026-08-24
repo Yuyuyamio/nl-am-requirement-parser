@@ -3,15 +3,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
-import subprocess
 import time
 import zipfile
-import html
-import os
-import re
-from xml.etree import ElementTree as ET
-from xml.sax.saxutils import quoteattr
 
 from pathlib import Path
 from typing import Any
@@ -19,6 +12,16 @@ from typing import Any
 from .multimaterial_job import (
     MultiMaterialJobError,
     load_multimaterial_job,
+)
+from .bambu_project_repair import (
+    repair_bambu_model_settings_xml,
+)
+from .bambu_auto_orient import (
+    BambuAutoOrientError,
+    auto_orient_with_bambu_cli,
+)
+from .bambu_headless_cli import (
+    run_bambu_cli,
 )
 
 
@@ -106,32 +109,13 @@ def probe_cli_help(
         .resolve()
     )
 
-    creationflags = 0
-
-    if (
-        os.name == "nt"
-        and hasattr(
-            subprocess,
-            "CREATE_NO_WINDOW",
-        )
-    ):
-        creationflags = (
-            subprocess.CREATE_NO_WINDOW
-        )
-
     try:
-        proc = subprocess.run(
+        cli_result = run_bambu_cli(
             [
                 str(studio_exe),
                 "--help",
             ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=60,
-            creationflags=
-                creationflags,
         )
 
     except Exception as exc:
@@ -143,9 +127,9 @@ def probe_cli_help(
         }
 
     text = (
-        (proc.stdout or "")
+        cli_result.stdout
         + "\n"
-        + (proc.stderr or "")
+        + cli_result.stderr
     )
 
     flags = (
@@ -160,7 +144,7 @@ def probe_cli_help(
         "available": True,
         "authoritative": False,
         "returncode_raw":
-            int(proc.returncode),
+            cli_result.raw_exit,
         "help_text_length":
             len(text),
         "flags": {
@@ -244,233 +228,6 @@ def build_assemble_payload(
         ]
     }
 
-
-
-_MODEL_SETTINGS_MEMBER = "Metadata/model_settings.config"
-
-_METADATA_LINE_RE = re.compile(
-    r'^(?P<indent>\s*)'
-    r'<metadata\s+'
-    r'key="(?P<key>.*?)"\s+'
-    r'value="(?P<value>.*)"\s*/>\s*$'
-)
-
-
-def _normalise_bambu_metadata_line(
-    line: str,
-) -> str:
-    """
-    Convert one Bambu model_settings metadata line into
-    well-formed XML without changing its semantic value.
-
-    This is intentionally generic: no printer names,
-    materials, model names, or current dog fixture values
-    are hardcoded here.
-    """
-    match = _METADATA_LINE_RE.match(line)
-
-    if match is None:
-        return line
-
-    indent = match.group("indent")
-
-    # First decode any already-valid entities, then emit one
-    # canonical XML-escaped representation.  This prevents
-    # double escaping of &quot;, &amp;, etc.
-    key = html.unescape(
-        match.group("key")
-    )
-
-    value = html.unescape(
-        match.group("value")
-    )
-
-    return (
-        indent
-        + "<metadata key="
-        + quoteattr(key)
-        + " value="
-        + quoteattr(value)
-        + "/>"
-    )
-
-
-def repair_bambu_model_settings_xml(
-    project_path: Path,
-) -> dict[str, object]:
-    """
-    Validate Metadata/model_settings.config.
-
-    Bambu Studio CLI can emit a project whose ZIP is valid
-    while model_settings.config contains unescaped XML
-    attribute characters.  Such a project cannot be opened
-    again by Bambu Studio and later fails with CLI_DATA_FILE_ERROR.
-
-    If XML is already valid this function is byte-preserving.
-    If it is invalid, only model_settings.config is rewritten.
-    Every other 3MF member is preserved.
-    """
-    project_path = (
-        Path(project_path)
-        .expanduser()
-        .resolve()
-    )
-
-    if not project_path.is_file():
-        raise RuntimeError(
-            "Project missing before XML validation: "
-            + str(project_path)
-        )
-
-    if not zipfile.is_zipfile(project_path):
-        raise RuntimeError(
-            "Project is not a valid ZIP/3MF: "
-            + str(project_path)
-        )
-
-    with zipfile.ZipFile(
-        project_path,
-        "r",
-    ) as source:
-
-        names = source.namelist()
-
-        if _MODEL_SETTINGS_MEMBER not in names:
-            raise RuntimeError(
-                "Project is missing "
-                + _MODEL_SETTINGS_MEMBER
-            )
-
-        original_raw = source.read(
-            _MODEL_SETTINGS_MEMBER
-        )
-
-    try:
-        ET.fromstring(original_raw)
-
-        return {
-            "status":
-                "model_settings_xml_valid",
-            "repaired":
-                False,
-            "member":
-                _MODEL_SETTINGS_MEMBER,
-        }
-
-    except ET.ParseError as initial_error:
-        initial_error_text = str(initial_error)
-
-    decoded = original_raw.decode(
-        "utf-8-sig",
-        errors="strict",
-    )
-
-    had_final_newline = decoded.endswith(
-        ("\n", "\r")
-    )
-
-    normalised_lines = [
-        _normalise_bambu_metadata_line(line)
-        for line in decoded.splitlines()
-    ]
-
-    repaired_text = "\n".join(
-        normalised_lines
-    )
-
-    if had_final_newline:
-        repaired_text += "\n"
-
-    repaired_raw = repaired_text.encode(
-        "utf-8"
-    )
-
-    # A repair is never accepted unless a real XML parser
-    # accepts the whole resulting document.
-    try:
-        ET.fromstring(repaired_raw)
-
-    except ET.ParseError as repaired_error:
-        raise RuntimeError(
-            "model_settings.config remained invalid after "
-            "canonical XML repair. "
-            f"before={initial_error_text!r}; "
-            f"after={str(repaired_error)!r}"
-        ) from repaired_error
-
-    tmp_path = project_path.with_name(
-        project_path.name
-        + ".model_settings_xml_repair.tmp"
-    )
-
-    if tmp_path.exists():
-        tmp_path.unlink()
-
-    try:
-        with zipfile.ZipFile(
-            project_path,
-            "r",
-        ) as source, zipfile.ZipFile(
-            tmp_path,
-            "w",
-        ) as target:
-
-            for info in source.infolist():
-                data = source.read(
-                    info.filename
-                )
-
-                if (
-                    info.filename
-                    == _MODEL_SETTINGS_MEMBER
-                ):
-                    data = repaired_raw
-
-                # Reuse the original ZipInfo so member
-                # names, timestamps, compression type and
-                # attributes remain intact.
-                target.writestr(
-                    info,
-                    data,
-                )
-
-        os.replace(
-            tmp_path,
-            project_path,
-        )
-
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-    # Verify the bytes actually written back into the 3MF.
-    with zipfile.ZipFile(
-        project_path,
-        "r",
-    ) as verify_zip:
-
-        verify_raw = verify_zip.read(
-            _MODEL_SETTINGS_MEMBER
-        )
-
-        ET.fromstring(
-            verify_raw
-        )
-
-    return {
-        "status":
-            "model_settings_xml_repaired",
-        "repaired":
-            True,
-        "member":
-            _MODEL_SETTINGS_MEMBER,
-        "initial_parse_error":
-            initial_error_text,
-        "original_bytes":
-            len(original_raw),
-        "repaired_bytes":
-            len(repaired_raw),
-    }
 
 
 def inspect_project_3mf(
@@ -725,122 +482,50 @@ def assemble_project(
     if output_path.exists():
         output_path.unlink()
 
-    command = [
-        str(studio_exe),
-
-        # Printability policy:
-        # Bambu Studio itself chooses the printable orientation.
-        "--orient",
-        "1",
-
-        "--arrange",
-        "1",
-
-        "--ensure-on-bed",
-
-        # Do not rely on the process profile's support default.
-        "--enable-support=1",
-        "--support-type=tree(auto)",
-
-        # Keep Bambu's own manufacturability detectors active.
-        "--detect-floating-vertical-shell=1",
-        "--detect-overhang-wall=1",
-        "--bridge-no-support=0",
-
-        "--load-settings",
-        f"{machine};{process}",
-
-
-        "--curr-bed-type",
-        build_plate,
-        "--load-filaments",
-        ";".join(
-            str(path)
-            for path
-            in filament_paths
-        ),
-
-        "--load-assemble-list",
-        str(assemble_json),
-
-        "--debug",
-        "5",
-
-        "--export-3mf",
-        str(output_path),
-    ]
-
     help_probe = probe_cli_help(
         studio_exe
     )
 
-    creationflags = 0
-
-    if (
-        os.name == "nt"
-        and hasattr(
-            subprocess,
-            "CREATE_NO_WINDOW",
-        )
-    ):
-        creationflags = (
-            subprocess.CREATE_NO_WINDOW
-        )
-
     started = time.time()
 
     try:
-        proc = subprocess.run(
-            command,
-            cwd=str(
-                output_path.parent
+        auto_orient = auto_orient_with_bambu_cli(
+            studio_exe=studio_exe,
+            assemble_list=assemble_json,
+            output_path=output_path,
+            machine_json=machine,
+            process_json=process,
+            filament_jsons=filament_paths,
+            build_plate=build_plate,
+            extra_options=(
+                "--enable-support=1",
+                "--support-type=tree(auto)",
+                "--detect-floating-vertical-shell=1",
+                "--detect-overhang-wall=1",
+                "--bridge-no-support=0",
             ),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            max_attempts=3,
             timeout=600,
-            creationflags=
-                creationflags,
         )
-
-    except subprocess.TimeoutExpired as exc:
+    except BambuAutoOrientError as exc:
         raise MultiMaterialProjectError(
-            "Bambu Studio assembly timed out."
+            "Bambu Studio assembly Auto Orient failed.\n"
+            + str(exc)
         ) from exc
 
-    raw_rc = int(
-        proc.returncode
+    command = auto_orient["command"]
+    raw_rc = int(auto_orient["returncode_raw"])
+    signed_rc = int(
+        auto_orient["returncode_signed"]
     )
-
-    signed_rc = (
-        _signed_return_code(
-            raw_rc
-        )
-    )
-
-    if signed_rc != 0:
-        raise MultiMaterialProjectError(
-            "Bambu Studio assembly failed.\n"
-            f"returncode_raw={raw_rc}\n"
-            f"returncode_signed={signed_rc}\n"
-            f"stdout_tail={proc.stdout[-3000:]}\n"
-            f"stderr_tail={proc.stderr[-3000:]}"
-        )
-
-    if not output_path.is_file():
-        raise MultiMaterialProjectError(
-            "Process returned success but exact "
-            "requested output does not exist."
-        )
 
     # A valid ZIP is not sufficient.  Bambu Studio can
     # emit malformed Metadata/model_settings.config.
     # Repair/validate that member before the project is
     # accepted by the canonical multimaterial pipeline.
-    xml_repair = repair_bambu_model_settings_xml(
-        output_path
-    )
+    xml_repair = auto_orient[
+        "output"
+    ].get("xml_repair")
 
     from am_print_executor.bambu_project_xy_guard import (
         ProjectXYPlacementError,
@@ -914,6 +599,12 @@ def assemble_project(
         "project":
             inspection,
 
+        "xml_repair":
+            xml_repair,
+
+        "xy_placement":
+            xy_placement,
+
 
         "build_plate": {
             "requested": build_plate,
@@ -930,6 +621,12 @@ def assemble_project(
 
         "returncode_signed":
             signed_rc,
+
+        "auto_orient_attempt_count":
+            auto_orient["attempt_count"],
+
+        "auto_orient_attempts":
+            auto_orient["attempts"],
 
         "elapsed_seconds":
             round(
@@ -1004,10 +701,14 @@ def assemble_project(
         },
 
         "stdout_tail":
-            proc.stdout[-2000:],
+            auto_orient["attempts"][-1][
+                "stdout_tail"
+            ],
 
         "stderr_tail":
-            proc.stderr[-2000:],
+            auto_orient["attempts"][-1][
+                "stderr_tail"
+            ],
     }
 
 

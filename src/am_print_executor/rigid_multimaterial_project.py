@@ -5,9 +5,7 @@ import copy
 import hashlib
 import json
 import math
-import os
 import posixpath
-import subprocess
 import time
 import zipfile
 import xml.etree.ElementTree as ET
@@ -19,6 +17,13 @@ import numpy as np
 import trimesh
 
 from am_print_executor import multimaterial_project as mm
+from am_print_executor.bambu_auto_orient import (
+    BambuAutoOrientError,
+    auto_orient_with_bambu_cli,
+)
+from am_print_executor.bambu_headless_cli import (
+    run_bambu_cli,
+)
 
 
 class RigidMultiMaterialError(RuntimeError):
@@ -641,12 +646,6 @@ def geometry_gate(
     }
 
 
-def _creationflags() -> int:
-    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
-        return subprocess.CREATE_NO_WINDOW
-    return 0
-
-
 def run_reference_auto_orient(
     *,
     studio_exe: Path,
@@ -657,64 +656,47 @@ def run_reference_auto_orient(
     first_filament: Path,
     build_plate: str,
 ) -> dict[str, Any]:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        output_path.unlink()
-    except FileNotFoundError:
-        pass
-
-    command = [
-        str(studio_exe),
-        "--orient", "1",
-        "--arrange", "1",
-        "--ensure-on-bed",
-        "--load-settings", f"{machine};{process}",
-        "--curr-bed-type", build_plate,
-        "--load-filaments", str(first_filament),
-        "--debug", "5",
-        "--export-3mf", str(output_path),
-        str(source_model),
-    ]
-
     started = time.time()
-    proc = subprocess.run(
-        command,
-        cwd=str(output_path.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=600,
-        creationflags=_creationflags(),
-    )
 
-    raw_rc = int(proc.returncode)
-    signed_rc = mm._signed_return_code(raw_rc)
-
-    if signed_rc != 0:
+    try:
+        auto_orient = auto_orient_with_bambu_cli(
+            studio_exe=studio_exe,
+            source_model=source_model,
+            output_path=output_path,
+            machine_json=machine,
+            process_json=process,
+            filament_jsons=[first_filament],
+            build_plate=build_plate,
+            max_attempts=3,
+            timeout=600,
+        )
+    except BambuAutoOrientError as exc:
         raise RigidMultiMaterialError(
             "Bambu reference Auto Orient failed.\n"
-            f"returncode_raw={raw_rc}\n"
-            f"returncode_signed={signed_rc}\n"
-            f"stdout_tail={proc.stdout[-3000:]}\n"
-            f"stderr_tail={proc.stderr[-3000:]}"
-        )
-
-    if not output_path.is_file():
-        raise RigidMultiMaterialError(
-            "Bambu reference Auto Orient returned success but no exact project was created."
-        )
-
-    mm.repair_bambu_model_settings_xml(output_path)
+            + str(exc)
+        ) from exc
 
     orientation = extract_reference_rotation(output_path)
 
     return {
         "project": str(output_path),
         "sha256": _sha256(output_path),
-        "command": command,
-        "returncode_raw": raw_rc,
-        "returncode_signed": signed_rc,
+        "command": auto_orient["command"],
+        "returncode_raw": auto_orient[
+            "returncode_raw"
+        ],
+        "returncode_signed": auto_orient[
+            "returncode_signed"
+        ],
+        "auto_orient_attempt_count": auto_orient[
+            "attempt_count"
+        ],
+        "auto_orient_attempts": auto_orient[
+            "attempts"
+        ],
+        "xml_repair": auto_orient[
+            "output"
+        ].get("xml_repair"),
         "elapsed_seconds": round(time.time() - started, 3),
         **{
             key: (
@@ -824,8 +806,9 @@ def assemble_rigid_project(
     except FileNotFoundError:
         pass
 
-    # Critical contract: no --orient, no --arrange, no --ensure-on-bed here.
-    # The one and only Auto Orient was already computed from the intact source.
+    # Critical geometry contract: never re-orient individual material regions.
+    # A validated reference orientation (possibly produced after an isolated retry)
+    # was already committed from the intact source.
     command = [
         str(studio_exe),
         "--enable-support=1",
@@ -842,32 +825,24 @@ def assemble_rigid_project(
     ]
 
     started = time.time()
-    proc = subprocess.run(
+    cli_result = run_bambu_cli(
         command,
+        expected_outputs=[output_path],
         cwd=str(output_path.parent),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=600,
-        creationflags=_creationflags(),
     )
 
-    raw_rc = int(proc.returncode)
-    signed_rc = mm._signed_return_code(raw_rc)
+    raw_rc = cli_result.raw_exit
+    signed_rc = cli_result.signed_exit
 
-    if signed_rc != 0:
+    if not cli_result.success:
         raise RigidMultiMaterialError(
             "Bambu rigid multimaterial assembly failed.\n"
             f"returncode_raw={raw_rc}\n"
             f"returncode_signed={signed_rc}\n"
-            f"stdout_tail={proc.stdout[-3000:]}\n"
-            f"stderr_tail={proc.stderr[-3000:]}"
-        )
-
-    if not output_path.is_file():
-        raise RigidMultiMaterialError(
-            "Rigid assembly returned success but exact output does not exist."
+            f"outputs_exist={cli_result.outputs_exist}\n"
+            f"stdout_tail={cli_result.stdout[-3000:]}\n"
+            f"stderr_tail={cli_result.stderr[-3000:]}"
         )
 
     xml_repair = mm.repair_bambu_model_settings_xml(output_path)
@@ -919,7 +894,7 @@ def assemble_rigid_project(
         "schema_version": "rigid-multimaterial-project-v1",
         "module": "M4",
         "status": final_status,
-        "pipeline": "single_source_auto_orient_shared_rigid_transform",
+        "pipeline": "committed_reference_auto_orient_shared_rigid_transform",
         "source_manifest": str(job_manifest),
         "source_model": str(source_model),
         "material_semantics_policy": derived_manifest[
@@ -966,9 +941,9 @@ def assemble_rigid_project(
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Rigid multimaterial Bambu project builder: Auto Orient the intact "
-            "source exactly once, apply the same rigid transform to every material "
-            "part, then assemble without per-part orient/arrange."
+            "Rigid multimaterial Bambu project builder: produce one validated "
+            "reference orientation for the intact source, apply its rigid transform "
+            "to every material part, then assemble without per-part orient/arrange."
         )
     )
     parser.add_argument("--studio", required=True)
@@ -1001,8 +976,12 @@ def main() -> int:
     policy = result["material_semantics_policy"]
 
     print("=== R2V RIGID MULTIMATERIAL AUTO-ORIENT ===")
-    print("PIPELINE=single_source_auto_orient_shared_rigid_transform")
-    print("SOURCE_AUTO_ORIENT_COUNT=1")
+    print("PIPELINE=committed_reference_auto_orient_shared_rigid_transform")
+    print("COMMITTED_REFERENCE_AUTO_ORIENT_COUNT=1")
+    print(
+        "REFERENCE_AUTO_ORIENT_CLI_ATTEMPT_COUNT=",
+        len(result["reference_auto_orient"].get("attempts", [])),
+    )
     print(
         "MATERIAL_PART_AUTO_ORIENT_COUNT=",
         1 if result["assembly"]["individual_orient_present"] else 0,

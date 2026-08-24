@@ -1,0 +1,10 @@
+{
+  "source_job_id": "AUTO-20260824-145515-EA8493EC",
+  "manual_verdict": "not_fdm_printable",
+  "old_gate_status": "pass",
+  "old_gate_minimum_bad_component_mm2": 5.0,
+  "source_stl_sha256": "b2a359e8e22525ecbe62d49e9db1701c9998dde61ef214ab7988a3af51c94f31",
+  "gcode_3mf_sha256": "bf687e0a9ee6b4ec22f1d654c96dcbdf8f69a9805e335395ba4622af1a004c23",
+  "observed_ignored_feature": "floating vertical shell",
+  "observed_ignored_feature_segment_count": 13076
+}

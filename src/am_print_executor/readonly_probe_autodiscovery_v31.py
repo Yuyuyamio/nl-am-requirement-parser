@@ -7,27 +7,22 @@ import os
 import socket
 import ssl
 import tempfile
-import threading
 import time
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    import paho.mqtt.client as mqtt
-except ImportError as exc:
-    mqtt = None
-    _PAHO_ERROR = exc
-else:
-    _PAHO_ERROR = None
+from .x1c_connection import (
+    MQTT_PORT,
+    MQTT_USERNAME,
+    REPORT_WILDCARD,
+    PrinterConnectionError,
+    connect_printer,
+    extract_device_id,
+    extract_status_summary,
+)
 
 REQUEST_ID_DEFAULT = "M2-1E4B2301FADD"
-MQTT_PORT = 8883
-MQTT_USERNAME = "bblp"
-REPORT_WILDCARD = "device/+/report"
-
-
 class ProbeError(RuntimeError):
     pass
 
@@ -94,126 +89,42 @@ def format_fingerprint(value: str) -> str:
 
 
 def _extract_device_id(topic: str) -> str | None:
-    parts = topic.split("/")
-    if len(parts) == 3 and parts[0] == "device" and parts[2] == "report" and parts[1]:
-        return parts[1]
-    return None
+    return extract_device_id(topic)
 
 
 def _extract_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
-    print_obj = payload.get("print")
-    if not isinstance(print_obj, dict):
-        return None
-    wanted = (
-        "gcode_state", "mc_percent", "mc_remaining_time", "nozzle_temper",
-        "bed_temper", "chamber_temper", "wifi_signal", "print_error",
-        "ams_status", "stg_cur"
-    )
-    summary = {key: print_obj.get(key) for key in wanted if key in print_obj}
-    summary["report_has_print_object"] = True
-    return summary
+    return extract_status_summary(payload)
 
 
 def passive_discover(ip_address: str, access_code: str, timeout: float = 20.0) -> ProbeResult:
-    if mqtt is None:
-        raise ProbeError("paho-mqtt is missing. Install paho-mqtt==2.1.0") from _PAHO_ERROR
-    if not access_code:
-        raise ProbeError("Access Code cannot be empty.")
-
     started = time.monotonic()
-    done = threading.Event()
-    state: dict[str, Any] = {
-        "connected": False,
-        "subscribed": False,
-        "device_id": None,
-        "summary": None,
-        "error": None,
-    }
-
-    def on_connect(client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
-        if reason_code.is_failure:
-            state["error"] = f"MQTT connection/authentication failed: {reason_code}"
-            done.set()
-            return
-        state["connected"] = True
-        result, _mid = client.subscribe(REPORT_WILDCARD, qos=0)
-        if result != mqtt.MQTT_ERR_SUCCESS:
-            state["error"] = f"Subscribe failed: {result}"
-            done.set()
-
-    def on_subscribe(client: Any, userdata: Any, mid: Any, reason_codes: Any, properties: Any) -> None:
-        failures = [str(code) for code in reason_codes if getattr(code, "is_failure", False)]
-        if failures:
-            state["error"] = f"MQTT subscription refused: {failures}"
-            done.set()
-            return
-        state["subscribed"] = True
-
-    def on_message(client: Any, userdata: Any, message: Any) -> None:
-        device_id = _extract_device_id(message.topic)
-        if not device_id:
-            return
-        try:
-            payload = json.loads(message.payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return
-        if not isinstance(payload, dict):
-            return
-        summary = _extract_summary(payload)
-        if summary is None:
-            return
-        state["device_id"] = device_id
-        state["summary"] = summary
-        done.set()
-
-    client = mqtt.Client(
-        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-        client_id=f"m4-auto-{uuid.uuid4().hex[:12]}",
-        protocol=mqtt.MQTTv311,
-        reconnect_on_failure=False,
-    )
-    client.username_pw_set(MQTT_USERNAME, access_code)
-    tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    tls_context.check_hostname = False
-    tls_context.verify_mode = ssl.CERT_NONE
-    client.tls_set_context(tls_context)
-    client.tls_insecure_set(True)
-    client.on_connect = on_connect
-    client.on_subscribe = on_subscribe
-    client.on_message = on_message
-
     try:
-        client.connect(ip_address, MQTT_PORT, keepalive=30)
-        client.loop_start()
-        done.wait(timeout)
-    except Exception as exc:
-        state["error"] = f"MQTT probe exception: {type(exc).__name__}: {exc}"
-    finally:
-        try:
-            client.disconnect()
-        except Exception:
-            pass
-        try:
-            client.loop_stop()
-        except Exception:
-            pass
-
-    if state["error"] is None and state["summary"] is None:
-        if not state["connected"]:
-            state["error"] = "Timed out before MQTT connection completed."
-        elif not state["subscribed"]:
-            state["error"] = "Connected but subscription did not complete."
-        else:
-            state["error"] = "Connected and subscribed, but no device/+/report status arrived."
-
+        status = connect_printer(
+            ip=ip_address,
+            access_code=access_code,
+            device_id=None,
+            timeout_seconds=timeout,
+            attempts=1,
+        )
+    except PrinterConnectionError as exc:
+        partial = exc.partial_status
+        return ProbeResult(
+            connected=bool(partial and partial.connected),
+            subscribed=bool(partial and partial.subscribed),
+            message_received=False,
+            device_id=exc.device_id,
+            summary=None,
+            error=f"{exc.code}: {exc}",
+            elapsed_seconds=round(time.monotonic() - started, 3),
+        )
     return ProbeResult(
-        connected=bool(state["connected"]),
-        subscribed=bool(state["subscribed"]),
-        message_received=state["summary"] is not None,
-        device_id=state["device_id"],
-        summary=state["summary"],
-        error=state["error"],
-        elapsed_seconds=round(time.monotonic() - started, 3),
+        connected=status.connected,
+        subscribed=status.subscribed,
+        message_received=status.printer_state_observed,
+        device_id=status.device_id,
+        summary=status.status_summary,
+        error=None,
+        elapsed_seconds=status.elapsed_seconds,
     )
 
 

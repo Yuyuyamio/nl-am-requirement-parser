@@ -18,6 +18,7 @@ dependencies = [
     "ultralytics>=8.4,<9",
     "shapely>=2,<3",
     "mapbox-earcut>=1.0.2,<2",
+    "faster-whisper>=1.2.1,<2",
 ]
 
 [project.scripts]
@@ -27,9 +28,15 @@ am-task-route = "am_requirement_parser.route_cli:main"
 am-creative-spec = "am_requirement_parser.creative_cli:main"
 am-m1 = "am_requirement_parser.main_cli:main"
 am-m1-verify = "am_requirement_parser.m1_verify:main"
+am-auto-print = "am_print_automation.cli:main"
+am-print-ui = "am_print_frontend.server:main"
+am-x1c-connect = "am_print_executor.x1c_connection_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+am_print_frontend = ["static/*.html", "static/*.css", "static/*.js"]

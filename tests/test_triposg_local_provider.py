@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import math
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
+
+import trimesh
 
 from am_model_generator.contracts import M2ProviderError
 from am_model_generator.providers.base import CreativeGenerationRequest
@@ -36,7 +39,7 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             source_payload_sha256="a" * 64,
             prompt="a cute sitting cartoon dog",
             negative_prompt=None,
-            target_height_mm=100.0,
+            target_height_mm=60.0,
             metadata={},
         )
 
@@ -92,10 +95,25 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             )
 
         if environment_name == "triposg":
+            normalized_mesh = (
+                trimesh.creation.box(
+                    extents=(
+                        1.403456,
+                        1.819824,
+                        1.874882,
+                    )
+                )
+            )
             (
                 job_directory
                 / "generated_model.glb"
-            ).write_bytes(b"fake-glb")
+            ).write_bytes(
+                trimesh.exchange.gltf.export_glb(
+                    trimesh.Scene(
+                        normalized_mesh
+                    )
+                )
+            )
             return self._worker_result(
                 {
                     "status": "completed",
@@ -113,7 +131,7 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             f"unexpected environment: {environment_name}"
         )
 
-    def test_submit_runs_both_workers_and_completes(
+    def test_submit_rescales_normalized_mesh_and_completes(
         self,
     ) -> None:
         self.bridge.run_json_worker.side_effect = (
@@ -165,6 +183,66 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             ]
         )
 
+        raw_mesh = trimesh.load_mesh(
+            submission.provider_metadata[
+                "raw_generated_model_path"
+            ],
+            process=False,
+        )
+        physical_mesh = trimesh.load_mesh(
+            submission.provider_metadata[
+                "generated_model_path"
+            ],
+            process=False,
+        )
+        raw_extents = [
+            float(value)
+            for value in raw_mesh.extents
+        ]
+        physical_extents = [
+            float(value)
+            for value in physical_mesh.extents
+        ]
+
+        self.assertTrue(
+            math.isclose(
+                raw_extents[2],
+                1.874882,
+                abs_tol=1e-6,
+            )
+        )
+        self.assertTrue(
+            math.isclose(
+                physical_extents[2],
+                60.0,
+                abs_tol=0.1,
+            )
+        )
+        self.assertGreater(
+            min(physical_extents),
+            10.0,
+        )
+        self.assertTrue(
+            math.isclose(
+                physical_extents[0]
+                / physical_extents[2],
+                raw_extents[0]
+                / raw_extents[2],
+                rel_tol=1e-6,
+                abs_tol=1e-6,
+            )
+        )
+        self.assertTrue(
+            math.isclose(
+                physical_extents[1]
+                / physical_extents[2],
+                raw_extents[1]
+                / raw_extents[2],
+                rel_tol=1e-6,
+                abs_tol=1e-6,
+            )
+        )
+
     def test_second_submit_reuses_in_memory_submission(
         self,
     ) -> None:
@@ -213,9 +291,18 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             destination,
         )
 
-        self.assertEqual(
-            destination.read_bytes(),
-            b"fake-glb",
+        downloaded_mesh = trimesh.load_mesh(
+            destination,
+            process=False,
+        )
+        self.assertTrue(
+            math.isclose(
+                float(
+                    downloaded_mesh.extents[2]
+                ),
+                60.0,
+                abs_tol=0.1,
+            )
         )
         self.assertFalse(
             metadata["network_called"]
