@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import trimesh
+import numpy as np
+from am_model_generator.coordinate_frame import load_print_scene
 
 from am_model_generator.contracts import M2ProviderError
 from am_model_generator.providers.base import CreativeGenerationRequest
@@ -213,7 +215,7 @@ class TripoSGLocalProviderTests(unittest.TestCase):
         )
         self.assertTrue(
             math.isclose(
-                physical_extents[2],
+                physical_extents[1],
                 60.0,
                 abs_tol=0.1,
             )
@@ -270,6 +272,25 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             2,
         )
 
+    def test_nonwatertight_generated_mesh_is_delivered_for_later_repair(self):
+        def worker(**kwargs):
+            result = self._worker_side_effect(**kwargs)
+            if kwargs["environment_name"] == "triposg":
+                path = next(self.cache_root.glob("triposg-local-*/generated_model.glb"))
+                mesh = trimesh.creation.icosphere(subdivisions=2)
+                mesh.update_faces(np.arange(len(mesh.faces) - 1))
+                path.write_bytes(trimesh.exchange.gltf.export_glb(trimesh.Scene(mesh)))
+            return result
+        self.bridge.run_json_worker.side_effect = worker
+        submission = self.provider.submit(self.request)
+        physical = load_print_scene(Path(submission.provider_metadata["generated_model_path"])).to_mesh()
+        self.assertEqual(submission.status, "completed")
+        self.assertAlmostEqual(physical.extents[2], 60, places=4)
+        self.assertFalse(physical.is_watertight)
+        report = submission.provider_metadata["target_size_postprocess"]
+        self.assertTrue(report["mesh_validation_required"])
+        self.assertFalse(report["printability_verified"])
+
     def test_download_artifact_copies_cached_glb(
         self,
     ) -> None:
@@ -298,7 +319,7 @@ class TripoSGLocalProviderTests(unittest.TestCase):
         self.assertTrue(
             math.isclose(
                 float(
-                    downloaded_mesh.extents[2]
+                    downloaded_mesh.extents[1]
                 ),
                 60.0,
                 abs_tol=0.1,

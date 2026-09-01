@@ -319,7 +319,7 @@ class NormalizationPipelineTests(
 
         self.assertTrue(
             math.isclose(
-                float(mesh.bounds[0][2]),
+                float(mesh.bounds[0][1]),  # Serialized GLB is Y-up; manufacturing STL is Z-up.
                 0.0,
                 abs_tol=1e-6,
             )

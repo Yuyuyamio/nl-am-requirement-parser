@@ -31,11 +31,8 @@ def _sha256(path: Path) -> str:
 
 
 def _load_mesh(path: Path) -> trimesh.Trimesh:
-    loaded = trimesh.load(
-        path,
-        force="mesh",
-        process=False,
-    )
+    from am_model_generator.coordinate_frame import load_print_scene
+    loaded = load_print_scene(path).to_mesh()
 
     if isinstance(loaded, trimesh.Scene):
         meshes = [
@@ -94,6 +91,7 @@ def _axis_aligned_rotations() -> list[np.ndarray]:
 
 def _candidate_transforms(
     mesh: trimesh.Trimesh,
+    *, preserve_upright: bool = True,
 ) -> list[tuple[np.ndarray, float, str]]:
     results: list[
         tuple[np.ndarray, float, str]
@@ -152,6 +150,8 @@ def _candidate_transforms(
     seen: set[tuple[float, ...]] = set()
 
     for transform, probability, source in results:
+        if preserve_upright and not np.allclose(transform[:3, :3] @ [0, 0, 1], [0, 0, 1], atol=1e-5):
+            continue
         key = tuple(
             np.round(
                 transform[:3, :3],
@@ -462,6 +462,7 @@ def _evaluate(
 def orient_for_printing(
     *,
     input_path: Path,
+    preserve_upright: bool = True,
     output_path: Path,
     report_path: Path,
     bed_x_mm: float = 256.0,
@@ -500,7 +501,7 @@ def orient_for_printing(
     candidates = []
 
     for transform, probability, source in (
-        _candidate_transforms(original)
+        _candidate_transforms(original, preserve_upright=preserve_upright)
     ):
         record, candidate = _evaluate(
             original,
@@ -623,6 +624,7 @@ def orient_for_printing(
             for record, _mesh in valid[:10]
         ],
         "policy": {
+            "preserve_upright": preserve_upright,
             "bed_x_mm":
                 bed_x_mm,
             "bed_y_mm":

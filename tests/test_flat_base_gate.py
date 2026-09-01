@@ -34,7 +34,38 @@ def _load_mesh(path: Path) -> trimesh.Trimesh:
 
 
 class FlatBaseGateTests(unittest.TestCase):
-    def test_current_real_curved_base_is_minimally_planarized(self) -> None:
+    def test_small_flat_patch_outside_center_of_mass_is_not_stable(self) -> None:
+        body = trimesh.creation.icosphere(subdivisions=3, radius=10)
+        body.apply_translation((0, 0, 10))
+        tiny_foot = trimesh.creation.box(extents=(3, 3, 8))
+        tiny_foot.apply_translation((5, 0, 4))
+        source = trimesh.boolean.union([body, tiny_foot], engine="manifold")
+        report = inspect_flat_printing_base(source)
+        self.assertFalse(report["base_flatness_passed"])
+        self.assertIn("center_of_mass_outside_support_polygon", report["blockers"])
+
+    def test_frozen_mouse_is_not_a_stable_flat_base(self) -> None:
+        path = Path(__file__).resolve().parents[1] / "outputs/flat_base_acceptance/AUTO-20260825-143340-FLATBASE-RESUME/current_mouse.repaired.bed_centered.flat_base.stl"
+        if not path.exists():
+            self.skipTest("local diagnostic artifact not present")
+        report = inspect_flat_printing_base(path)
+        self.assertFalse(report["base_flatness_passed"])
+        self.assertIn("center_of_mass_outside_support_polygon", report["blockers"])
+
+    def test_integrated_foundation_is_planar_and_stable(self) -> None:
+        from am_print_executor.printable_foundation import add_printable_foundation
+        source = _load_mesh(CURRENT_FAILED_MODEL)
+        vertices = source.vertices.copy()
+        candidate, action = add_printable_foundation(source)
+        report = inspect_flat_printing_base(candidate)
+        self.assertTrue(report["base_flatness_passed"], report)
+        self.assertGreater(report["bed_contact_area_mm2"], 100)
+        self.assertGreater(report["stability"]["stability_margin_mm"], 1)
+        self.assertLess(report["base_height_range_mm"], .001)
+        self.assertAlmostEqual(candidate.extents[2], source.extents[2], places=5)
+        np.testing.assert_array_equal(source.vertices, vertices)
+
+    def test_current_real_curved_base_gets_a_stable_foundation(self) -> None:
         source = _load_mesh(CURRENT_FAILED_MODEL)
         before = inspect_flat_printing_base(source)
 
@@ -47,6 +78,8 @@ class FlatBaseGateTests(unittest.TestCase):
             before["required_contact_area_mm2"],
         )
         self.assertTrue(result["flat_base_repair"]["applied"])
+        self.assertEqual(result["flat_base_repair"]["method"], "additive_planar_foundation")
+        self.assertTrue(after["stability"]["center_of_mass_inside_support_polygon"])
         self.assertLessEqual(
             result["flat_base_repair"]["clip_depth_mm"],
             1.5,

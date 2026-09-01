@@ -7,6 +7,7 @@ import json
 import re
 import threading
 import time
+import uuid
 import webbrowser
 
 from dataclasses import dataclass, fields
@@ -14,7 +15,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Mapping
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from am_print_automation import (
     AutomationConfig,
@@ -32,6 +33,8 @@ from am_print_executor.x1c_connection import (
 )
 
 from .speech import SpeechTranscriber, SpeechTranscriptionError
+from .delivery import DOWNLOAD_NAMES, DeliveryUnavailable, delivery_summary, verified_files
+from .support_preview import SupportPreviewError, build_support_preview
 
 
 STATIC_DIRECTORY = Path(__file__).with_name("static")
@@ -39,6 +42,7 @@ _RUNTIME_DEPENDENCIES = {
     "faster_whisper": "faster-whisper",
     "jsonschema": "jsonschema",
     "mapbox_earcut": "mapbox-earcut",
+    "manifold3d": "manifold3d",
     "numpy": "numpy",
     "openai": "openai",
     "paho.mqtt": "paho-mqtt",
@@ -49,7 +53,13 @@ _RUNTIME_DEPENDENCIES = {
 }
 _JOB_ROUTE = re.compile(
     r"^/api/jobs/(?P<job_id>[A-Za-z0-9][A-Za-z0-9._-]{2,63})"
-    r"(?:/(?P<action>pause|resume|stop|retry))?$"
+    r"(?:/(?P<action>pause|resume|stop|retry|pin|unpin))?$"
+)
+_FILE_ROUTE = re.compile(
+    r"^/api/jobs/(?P<job_id>[A-Za-z0-9][A-Za-z0-9._-]{2,63})/files/(?P<kind>project|gcode|stl)$"
+)
+_SUPPORT_PREVIEW_ROUTE = re.compile(
+    r"^/api/jobs/(?P<job_id>[A-Za-z0-9][A-Za-z0-9._-]{2,63})/support-preview$"
 )
 _TERMINAL_STATUSES = {
     "ready_to_print",
@@ -167,6 +177,7 @@ class JobManager:
         self._printer_connection_provider = printer_connection_provider
         self._runtimes: dict[str, _RuntimeJob] = {}
         self._lock = threading.RLock()
+        self._ui_preferences_path = self.output_root / ".frontend_ui_preferences.json"
 
     def set_access_code_provider(
         self,
@@ -186,7 +197,7 @@ class JobManager:
         self,
         transcript: str,
         *,
-        start_print: bool = True,
+        start_print: bool = False,
     ) -> dict[str, Any]:
         cleaned = transcript.strip()
         if not cleaned:
@@ -223,6 +234,8 @@ class JobManager:
             if existing is not None and existing.alive:
                 raise ApiError(HTTPStatus.CONFLICT, "这个任务仍在运行。")
         print_stage = state.get("stages", {}).get("print_start", {})
+        if state.get("status") == "print_started" or print_stage.get("status") == "completed":
+            raise ApiError(HTTPStatus.CONFLICT, "此任务已发送打印，不能重复开打。")
         if (
             state.get("status") == "manual_reconciliation_required"
             or print_stage.get("status") in {"running", "outcome_unknown"}
@@ -236,6 +249,11 @@ class JobManager:
             output_root=self.output_root,
             start_print=start_print,
         )
+        if config.start_print:
+            try:
+                verified_files(state, self.output_root / job_id)
+            except (DeliveryUnavailable, OSError, TypeError, AttributeError) as exc:
+                raise ApiError(HTTPStatus.CONFLICT, "当前任务缺少有效的最终验收文件，不能启动打印。") from exc
         runtime = _RuntimeJob(
             job_id=job_id,
             transcript=str(state.get("request_text", "")),
@@ -387,12 +405,14 @@ class JobManager:
         if runtime_error is not None and not alive:
             status = "failed"
         dispatch_locked = current_stage == "print_start" or status == "print_started"
+        from am_print_automation.preparation_recovery import can_recover_preparation
         payload: dict[str, Any] = {
             "job_id": job_id,
             "status": status,
             "current_stage": current_stage,
             "request_text": state.get("request_text", ""),
             "created_unix": state.get("created_unix"),
+            "preparation_started_unix": state.get("preparation_started_unix"),
             "updated_unix": state.get("updated_unix"),
             "start_print_requested": bool(state.get("start_print_requested")),
             "stages": state.get("stages", {}),
@@ -407,12 +427,109 @@ class JobManager:
                 "stop_scope": "workflow_only",
             },
             "terminal": status in _TERMINAL_STATUSES and not alive,
+            "preparation_recovery_available": not alive and can_recover_preparation(state),
+            "pinned": self._is_pinned(job_id),
         }
         if include_events:
+            payload["delivery"] = (delivery_summary(state, self.output_root / job_id)
+                                   if not alive and status == state.get("status")
+                                   else {"available": False, "message": "等待最终检查完成。"})
             payload["events"] = _read_events(
                 self.output_root / job_id / "workflow_events.jsonl"
             )
         return payload
+
+    def download(self, job_id: str, kind: str) -> tuple[Path, str, str]:
+        with self._lock:
+            runtime = self._runtimes.get(job_id)
+            if runtime is not None and (runtime.alive or runtime.error is not None):
+                raise ApiError(HTTPStatus.CONFLICT, "任务仍在运行或已失败，不能下载成品。")
+        try:
+            path, digest = verified_files(self._state(job_id), self.output_root / job_id)[kind]
+        except (DeliveryUnavailable, OSError, KeyError, TypeError, AttributeError) as exc:
+            raise ApiError(HTTPStatus.CONFLICT, "最终文件未通过核验，不能下载。") from exc
+        return path, DOWNLOAD_NAMES[kind], digest
+
+    def support_preview(self, job_id: str) -> dict[str, Any]:
+        with self._lock:
+            runtime = self._runtimes.get(job_id)
+            if runtime is not None and (runtime.alive or runtime.error is not None):
+                raise ApiError(HTTPStatus.CONFLICT, "任务仍在运行或已失败，不能预览支撑。")
+        try:
+            files = verified_files(self._state(job_id), self.output_root / job_id)
+            return build_support_preview(files)
+        except (DeliveryUnavailable, SupportPreviewError, OSError, TypeError, AttributeError) as exc:
+            raise ApiError(HTTPStatus.CONFLICT, "最终支撑未通过核验，不能预览。") from exc
+
+    def _pinned_job_ids(self) -> list[str]:
+        stored = _read_json(self._ui_preferences_path) or {}
+        values = stored.get("pinned_job_ids")
+        if not isinstance(values, list):
+            return []
+        result: list[str] = []
+        for value in values:
+            job_id = str(value)
+            if _JOB_ROUTE.fullmatch(f"/api/jobs/{job_id}") and job_id not in result:
+                result.append(job_id)
+        return result
+
+    def _write_pinned_job_ids(self, job_ids: list[str]) -> None:
+        payload = json.dumps(
+            {"version": 1, "pinned_job_ids": job_ids},
+            ensure_ascii=False,
+            indent=2,
+        )
+        temporary = self.output_root / f".frontend_ui_preferences.{uuid.uuid4().hex}.tmp"
+        try:
+            temporary.write_text(payload, encoding="utf-8")
+            temporary.replace(self._ui_preferences_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _is_pinned(self, job_id: str) -> bool:
+        with self._lock:
+            return job_id in self._pinned_job_ids()
+
+    def set_pinned(self, job_id: str, pinned: bool) -> dict[str, Any]:
+        self._state(job_id)
+        with self._lock:
+            job_ids = [value for value in self._pinned_job_ids() if value != job_id]
+            if pinned:
+                job_ids.insert(0, job_id)
+            try:
+                self._write_pinned_job_ids(job_ids)
+            except OSError as exc:
+                raise ApiError(HTTPStatus.INTERNAL_SERVER_ERROR, "无法保存置顶状态。") from exc
+        return self.snapshot(job_id)
+
+    def delete_job(self, job_id: str) -> dict[str, Any]:
+        self._state(job_id)
+        with self._lock:
+            runtime = self._runtimes.get(job_id)
+            if runtime is not None and runtime.alive:
+                raise ApiError(HTTPStatus.CONFLICT, "任务仍在运行，请先停止并等待它完全结束。")
+            requested_directory = self.output_root / job_id
+            job_directory = requested_directory.resolve()
+            if (
+                job_directory.parent != self.output_root
+                or not job_directory.is_dir()
+                or requested_directory.is_symlink()
+            ):
+                raise ApiError(HTTPStatus.CONFLICT, "任务目录不安全，不能删除。")
+            deleted_root = self.output_root / ".deleted_jobs"
+            deleted_root.mkdir(parents=True, exist_ok=True)
+            destination = deleted_root / f"{job_id}-{time.time_ns()}"
+            try:
+                job_directory.replace(destination)
+            except OSError as exc:
+                raise ApiError(HTTPStatus.CONFLICT, "任务文件正在被占用，暂时不能删除。") from exc
+            self._runtimes.pop(job_id, None)
+            remaining = [value for value in self._pinned_job_ids() if value != job_id]
+            try:
+                self._write_pinned_job_ids(remaining)
+            except OSError:
+                pass
+        return {"job_id": job_id, "status": "deleted", "recoverable": True}
 
     def list_jobs(self, *, limit: int = 40) -> list[dict[str, Any]]:
         job_ids: set[str] = set()
@@ -430,10 +547,13 @@ class JobManager:
                 jobs.append(self.snapshot(job_id, include_events=False))
             except ApiError:
                 continue
-        jobs.sort(
-            key=lambda item: float(item.get("updated_unix") or 0),
-            reverse=True,
-        )
+        pinned_order = {job_id: index for index, job_id in enumerate(self._pinned_job_ids())}
+        jobs.sort(key=lambda item: (
+            0 if item["job_id"] in pinned_order else 1,
+            pinned_order.get(item["job_id"], 0)
+            if item["job_id"] in pinned_order
+            else -float(item.get("updated_unix") or 0),
+        ))
         return jobs[:limit]
 
 
@@ -545,10 +665,13 @@ class ApplicationHandler(BaseHTTPRequestHandler):
         "/index.html": ("index.html", "text/html; charset=utf-8"),
         "/styles.css": ("styles.css", "text/css; charset=utf-8"),
         "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+        "/model-preview.js": ("model-preview.js", "text/javascript; charset=utf-8"),
+        "/guide": ("guide.html", "text/html; charset=utf-8"),
     }
 
     def do_GET(self) -> None:
         try:
+            self._check_local_request()
             path = unquote(urlparse(self.path).path)
             if path == "/api/health":
                 self._json(
@@ -568,6 +691,20 @@ class ApplicationHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/jobs":
                 self._json(HTTPStatus.OK, {"jobs": self.server.manager.list_jobs()})
+                return
+            file_match = _FILE_ROUTE.fullmatch(path)
+            if file_match:
+                file_path, filename, digest = self.server.manager.download(
+                    file_match.group("job_id"), file_match.group("kind")
+                )
+                self._file(file_path, "application/octet-stream", filename=filename, digest=digest)
+                return
+            preview_match = _SUPPORT_PREVIEW_ROUTE.fullmatch(path)
+            if preview_match:
+                self._json(
+                    HTTPStatus.OK,
+                    self.server.manager.support_preview(preview_match.group("job_id")),
+                )
                 return
             match = _JOB_ROUTE.fullmatch(path)
             if match and not match.group("action"):
@@ -592,6 +729,7 @@ class ApplicationHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            self._check_local_request()
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path == "/api/speech/transcribe":
@@ -640,7 +778,7 @@ class ApplicationHandler(BaseHTTPRequestHandler):
             if path == "/api/jobs":
                 snapshot = self.server.manager.start_job(
                     str(body.get("transcript", "")),
-                    start_print=bool(body.get("start_print", True)),
+                    start_print=self._print_choice(body, default=False),
                 )
                 self._json(HTTPStatus.ACCEPTED, snapshot)
                 return
@@ -655,12 +793,16 @@ class ApplicationHandler(BaseHTTPRequestHandler):
                 result = self.server.manager.resume(job_id)
             elif action == "stop":
                 result = self.server.manager.stop(job_id)
+            elif action == "pin":
+                result = self.server.manager.set_pinned(job_id, True)
+            elif action == "unpin":
+                result = self.server.manager.set_pinned(job_id, False)
             else:
                 start_print = body.get("start_print")
                 result = self.server.manager.retry_job(
                     job_id,
                     start_print=(
-                        bool(start_print) if start_print is not None else None
+                        self._print_choice(body, default=False) if start_print is not None else False
                     ),
                 )
             self._json(HTTPStatus.ACCEPTED, result)
@@ -676,11 +818,48 @@ class ApplicationHandler(BaseHTTPRequestHandler):
                 {"error": "本地应用遇到内部错误。"},
             )
 
+    def do_DELETE(self) -> None:
+        try:
+            self._check_local_request()
+            path = unquote(urlparse(self.path).path)
+            match = _JOB_ROUTE.fullmatch(path)
+            if not match or match.group("action"):
+                raise ApiError(HTTPStatus.NOT_FOUND, "接口不存在。")
+            self._json(
+                HTTPStatus.OK,
+                self.server.manager.delete_job(match.group("job_id")),
+            )
+        except ApiError as exc:
+            self._json(exc.status, {"error": str(exc)})
+        except Exception:
+            self._json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": "本地应用遇到内部错误。"},
+            )
+
+    def _check_local_request(self) -> None:
+        authorities = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}", f"[::1]:{self.server.server_port}"}
+        if self.headers.get("Host", "").lower() not in authorities:
+            raise ApiError(HTTPStatus.FORBIDDEN, "仅接受本机地址的请求。")
+        origin = self.headers.get("Origin")
+        if origin and origin not in {"http://" + authority for authority in authorities}:
+            raise ApiError(HTTPStatus.FORBIDDEN, "不允许其他网站控制本地打印流程。")
+        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+            raise ApiError(HTTPStatus.FORBIDDEN, "不允许跨站访问本地打印流程。")
+
+    def _print_choice(self, body: Mapping[str, Any], *, default: bool) -> bool:
+        value = body.get("start_print", default)
+        if not isinstance(value, bool):
+            raise ApiError(HTTPStatus.BAD_REQUEST, "打印选项必须明确为开或关。")
+        return value
+
     def _request_json(self) -> dict[str, Any]:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as exc:
             raise ApiError(HTTPStatus.BAD_REQUEST, "请求长度无效。") from exc
+        if length < 0:
+            raise ApiError(HTTPStatus.BAD_REQUEST, "请求长度无效。")
         if length > 65536:
             raise ApiError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "请求内容过大。")
         raw = self.rfile.read(length) if length else b"{}"
@@ -706,15 +885,22 @@ class ApplicationHandler(BaseHTTPRequestHandler):
             )
         return self.rfile.read(length)
 
-    def _file(self, path: Path, content_type: str) -> None:
+    def _file(self, path: Path, content_type: str, *, filename: str | None = None, digest: str | None = None) -> None:
         try:
             payload = path.read_bytes()
         except OSError as exc:
             raise ApiError(HTTPStatus.NOT_FOUND, "静态资源不存在。") from exc
+        if digest is not None:
+            import hashlib
+            if hashlib.sha256(payload).hexdigest() != digest:
+                raise ApiError(HTTPStatus.CONFLICT, "文件在读取时发生变化，请重新核验。")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-cache")
+        if filename:
+            self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + quote(filename))
+            self.send_header("X-Artifact-SHA256", digest or "")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header(
             "Content-Security-Policy",

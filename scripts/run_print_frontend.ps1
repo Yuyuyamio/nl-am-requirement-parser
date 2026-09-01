@@ -21,7 +21,7 @@ if (-not (Test-Path -LiteralPath $pythonExecutable -PathType Leaf)) {
 
 $serverArguments = @(
     "-m",
-    "am_print_frontend.server",
+    "am_print_frontend",
     "--host",
     "127.0.0.1",
     "--port",

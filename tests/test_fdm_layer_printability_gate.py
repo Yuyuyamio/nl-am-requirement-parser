@@ -10,7 +10,13 @@ from pathlib import Path
 import trimesh
 
 from am_print_executor.gcode_printability_gate import (
+    _continuous_bridge_free_span_report,
+    _continuous_bridge_has_two_model_anchors,
+    _segment_cells,
     inspect_final_gcode_printability,
+)
+from am_print_executor.gcode_support_continuity import (
+    ExtrusionSegment,
 )
 
 
@@ -323,6 +329,219 @@ class FdmLayerPrintabilityGateTests(unittest.TestCase):
                     for blocker in long_result["blockers"]
                 )
             )
+
+    def test_continuous_bridge_anchor_fallback_accepts_two_ended_major_span(self):
+        bridge = ExtrusionSegment(
+            z=0.6,
+            x1=0.0,
+            y1=0.0,
+            x2=4.6,
+            y2=0.0,
+            feature="Bridge",
+        )
+        previous = [
+            ExtrusionSegment(
+                z=0.4,
+                x1=-0.2,
+                y1=-1.0,
+                x2=-0.2,
+                y2=1.0,
+                feature="Outer wall",
+            ),
+            ExtrusionSegment(
+                z=0.4,
+                x1=4.8,
+                y1=-1.0,
+                x2=4.8,
+                y2=1.0,
+                feature="Outer wall",
+            ),
+        ]
+
+        component = _segment_cells(
+            bridge,
+            cell_mm=0.4,
+        )
+
+        self.assertTrue(
+            _continuous_bridge_has_two_model_anchors(
+                component,
+                [bridge],
+                previous,
+                cell_mm=0.4,
+                support_radius_mm=0.273,
+                component_span_mm=4.8,
+                line_width_mm=0.42,
+            )
+        )
+
+    def test_continuous_bridge_anchor_fallback_rejects_single_ended_bridge(self):
+        bridge = ExtrusionSegment(
+            z=0.6,
+            x1=0.0,
+            y1=0.0,
+            x2=4.6,
+            y2=0.0,
+            feature="Bridge",
+        )
+        previous = [
+            ExtrusionSegment(
+                z=0.4,
+                x1=-0.2,
+                y1=-1.0,
+                x2=-0.2,
+                y2=1.0,
+                feature="Outer wall",
+            ),
+        ]
+
+        component = _segment_cells(
+            bridge,
+            cell_mm=0.4,
+        )
+
+        self.assertFalse(
+            _continuous_bridge_has_two_model_anchors(
+                component,
+                [bridge],
+                previous,
+                cell_mm=0.4,
+                support_radius_mm=0.273,
+                component_span_mm=4.8,
+                line_width_mm=0.42,
+            )
+        )
+
+    def test_effective_bridge_span_accepts_internal_bridge_over_reachable_infill(self):
+        bridge = ExtrusionSegment(
+            z=0.6,
+            x1=0.0,
+            y1=0.0,
+            x2=18.8,
+            y2=0.0,
+            feature="Bridge",
+        )
+
+        previous = []
+
+        # Repeated reachable model lines emulate sparse infill underneath
+        # an internal bridge. Individual free gaps are below 8mm although
+        # the full bridge region is much wider than 8mm.
+        for x_value in (
+            0.0,
+            4.0,
+            8.0,
+            12.0,
+            16.0,
+            18.8,
+        ):
+            previous.append(
+                ExtrusionSegment(
+                    z=0.4,
+                    x1=x_value,
+                    y1=-1.0,
+                    x2=x_value,
+                    y2=1.0,
+                    feature="Sparse infill",
+                )
+            )
+
+        component = _segment_cells(
+            bridge,
+            cell_mm=0.4,
+        )
+
+        report = (
+            _continuous_bridge_free_span_report(
+                component,
+                [bridge],
+                previous,
+                cell_mm=0.4,
+                support_radius_mm=0.273,
+                component_span_mm=18.8,
+                line_width_mm=0.42,
+            )
+        )
+
+        self.assertTrue(
+            report["available"]
+        )
+
+        self.assertTrue(
+            report[
+                "all_major_segments_two_ended"
+            ]
+        )
+
+        self.assertLessEqual(
+            report[
+                "max_continuous_free_span_mm"
+            ],
+            8.0,
+        )
+
+    def test_effective_bridge_span_rejects_true_long_free_air_bridge(self):
+        bridge = ExtrusionSegment(
+            z=0.6,
+            x1=0.0,
+            y1=0.0,
+            x2=14.0,
+            y2=0.0,
+            feature="Bridge",
+        )
+
+        previous = [
+            ExtrusionSegment(
+                z=0.4,
+                x1=0.0,
+                y1=-1.0,
+                x2=0.0,
+                y2=1.0,
+                feature="Outer wall",
+            ),
+            ExtrusionSegment(
+                z=0.4,
+                x1=14.0,
+                y1=-1.0,
+                x2=14.0,
+                y2=1.0,
+                feature="Outer wall",
+            ),
+        ]
+
+        component = _segment_cells(
+            bridge,
+            cell_mm=0.4,
+        )
+
+        report = (
+            _continuous_bridge_free_span_report(
+                component,
+                [bridge],
+                previous,
+                cell_mm=0.4,
+                support_radius_mm=0.273,
+                component_span_mm=14.0,
+                line_width_mm=0.42,
+            )
+        )
+
+        self.assertTrue(
+            report["available"]
+        )
+
+        self.assertTrue(
+            report[
+                "all_major_segments_two_ended"
+            ]
+        )
+
+        self.assertGreater(
+            report[
+                "max_continuous_free_span_mm"
+            ],
+            8.0,
+        )
 
     def test_disconnected_mesh_component_above_plate_blocks(self):
         with tempfile.TemporaryDirectory() as temporary:

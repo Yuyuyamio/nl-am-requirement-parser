@@ -4,6 +4,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from typing import Any
 
@@ -198,6 +199,23 @@ class TestM2Normalization(
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
+    def test_public_pipeline_uses_anatomical_height_for_asymmetric_gltf(self):
+        from am_model_generator.coordinate_frame import export_print_glb
+        asymmetric = trimesh.creation.box(extents=(20, 10, 40))
+        asymmetric.apply_translation((0, 0, 20))
+        # Patch the mock provider's raw asset only; normalization must use its
+        # real public path (including wrappers), not a helper tested in isolation.
+        with patch("am_model_generator.coordinate_frame.export_print_glb",
+                   return_value=export_print_glb(asymmetric)):
+            task = _create_validated_raw_task(self.root / "asymmetric")
+        result = normalize_m2_model(task)
+        self.assertAlmostEqual(result["source_height_mm"], 40)
+        world = trimesh.load_scene(task / "normalized_model.glb", process=False).to_mesh()
+        self.assertAlmostEqual(world.extents[1], 201, places=4)
+        self.assertAlmostEqual(world.extents[0], 100.5, places=4)
+        self.assertAlmostEqual(world.extents[2], 50.25, places=4)
+        self.assertAlmostEqual(world.bounds[0, 1], 0, places=4)
+
     def test_normalization_creates_target_height_model(
         self,
     ) -> None:
@@ -260,13 +278,13 @@ class TestM2Normalization(
             )
 
         self.assertAlmostEqual(
-            float(mesh.extents[2]),
+            float(mesh.extents[1]),
             201.0,
             places=5,
         )
 
         self.assertAlmostEqual(
-            float(mesh.bounds[0][2]),
+            float(mesh.bounds[0][1]),
             0.0,
             places=5,
         )

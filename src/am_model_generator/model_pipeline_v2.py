@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import trimesh
+from .coordinate_frame import load_print_scene, export_print_glb
 from jsonschema import Draft202012Validator
 
 from .artifacts import (
@@ -650,7 +651,7 @@ def _load_combined_mesh(
     int,
 ]:
     try:
-        scene = trimesh.load_scene(
+        scene = load_print_scene(
             model_path,
             process=False,
         )
@@ -1359,11 +1360,7 @@ def _export_glb_atomic(
     )
 
     try:
-        data = (
-            trimesh.exchange.gltf.export_glb(
-                trimesh.Scene(mesh)
-            )
-        )
+        data = export_print_glb(mesh)
 
         if not isinstance(data, bytes):
             raise M2ProviderError(
@@ -1608,6 +1605,8 @@ def normalize_m2_model_v2(
         )
 
     if normalized_exists and receipt_exists:
+        from .coordinate_frame import require_current_normalized_frame
+        require_current_normalized_frame(normalized_model_path)
         receipt = _read_json_object(
             normalization_receipt_path,
             label=(

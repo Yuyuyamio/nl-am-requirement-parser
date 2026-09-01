@@ -172,6 +172,443 @@ def _component_xy_bounds(
     ]
 
 
+def _point_to_segment_distance_xy(
+    *,
+    point_x: float,
+    point_y: float,
+    segment: ExtrusionSegment,
+) -> float:
+    """Continuous XY distance from a point to an extrusion centreline."""
+
+    dx = float(segment.x2) - float(segment.x1)
+    dy = float(segment.y2) - float(segment.y1)
+    denominator = dx * dx + dy * dy
+
+    if denominator <= 1e-15:
+        return math.hypot(
+            point_x - float(segment.x1),
+            point_y - float(segment.y1),
+        )
+
+    ratio = (
+        (
+            (point_x - float(segment.x1)) * dx
+            + (point_y - float(segment.y1)) * dy
+        )
+        / denominator
+    )
+    ratio = max(0.0, min(1.0, ratio))
+
+    closest_x = float(segment.x1) + ratio * dx
+    closest_y = float(segment.y1) + ratio * dy
+
+    return math.hypot(
+        point_x - closest_x,
+        point_y - closest_y,
+    )
+
+
+def _continuous_bridge_has_two_model_anchors(
+    component: set[tuple[int, int]],
+    bridge_segments: list[ExtrusionSegment],
+    previous_model_segments: list[ExtrusionSegment],
+    *,
+    cell_mm: float,
+    support_radius_mm: float,
+    component_span_mm: float,
+    line_width_mm: float,
+) -> bool:
+    """Confirm a raster-ambiguous short bridge using continuous geometry.
+
+    This is deliberately conservative.
+
+    The normal raster test remains authoritative. This fallback is consulted
+    only for a bridge that is already short enough to satisfy the configured
+    bridge-span policy but whose raster contact count is below two.
+
+    To prevent a tiny connector on one supported side from legitimising an
+    otherwise one-sided bridge, at least one major bridge extrusion must span
+    at least half of the raster component and both of that extrusion's real
+    endpoints must lie within the same self-support radius used by the layer
+    connectivity gate.
+
+    Only reachable MODEL extrusion from prior layers is considered here.
+    Support toolpaths are intentionally not used by this fallback.
+    """
+
+    if not component:
+        return False
+
+    if not bridge_segments:
+        return False
+
+    if not previous_model_segments:
+        return False
+
+    required_probe_length = max(
+        float(line_width_mm),
+        float(component_span_mm) * 0.50,
+    )
+
+    for segment in bridge_segments:
+        segment_cells = _segment_cells(
+            segment,
+            cell_mm=cell_mm,
+        )
+
+        if not component.intersection(
+            segment_cells
+        ):
+            continue
+
+        segment_length = math.hypot(
+            float(segment.x2) - float(segment.x1),
+            float(segment.y2) - float(segment.y1),
+        )
+
+        if (
+            segment_length + 1e-9
+            < required_probe_length
+        ):
+            continue
+
+        start_distance = min(
+            _point_to_segment_distance_xy(
+                point_x=float(segment.x1),
+                point_y=float(segment.y1),
+                segment=previous,
+            )
+            for previous
+            in previous_model_segments
+        )
+
+        end_distance = min(
+            _point_to_segment_distance_xy(
+                point_x=float(segment.x2),
+                point_y=float(segment.y2),
+                segment=previous,
+            )
+            for previous
+            in previous_model_segments
+        )
+
+        if (
+            start_distance
+            <= support_radius_mm + 1e-9
+            and end_distance
+            <= support_radius_mm + 1e-9
+        ):
+            return True
+
+    return False
+
+
+def _continuous_bridge_free_span_report(
+    component: set[tuple[int, int]],
+    bridge_segments: list[ExtrusionSegment],
+    previous_model_segments: list[ExtrusionSegment],
+    *,
+    cell_mm: float,
+    support_radius_mm: float,
+    component_span_mm: float,
+    line_width_mm: float,
+    sample_step_mm: float = 0.02,
+) -> dict[str, Any]:
+    """Measure the real continuous unsupported span of a bridge component.
+
+    A slicer may emit one large internal bridge region over sparse infill.
+    The bridge component bounding box is therefore not necessarily a free-air
+    bridge span. The physical quantity relevant to the configured bridge
+    limit is the longest continuous part of an actual bridge extrusion that
+    has no reachable prior-layer model material within the same local support
+    radius used elsewhere by this gate.
+
+    This function is deliberately conservative:
+    - only already-reachable prior MODEL extrusion may anchor the bridge;
+    - major bridge lines must be anchored at both real endpoints;
+    - short connector moves do not legitimise a large one-sided bridge;
+    - the existing maximum-safe-bridge-span policy remains unchanged.
+    """
+
+    if not component:
+        return {
+            "available": False,
+            "max_continuous_free_span_mm": None,
+            "major_segment_count": 0,
+            "two_ended_major_segment_count": 0,
+            "all_major_segments_two_ended": False,
+        }
+
+    relevant: list[ExtrusionSegment] = []
+
+    for segment in bridge_segments:
+        segment_cells = _segment_cells(
+            segment,
+            cell_mm=cell_mm,
+        )
+
+        if component.intersection(
+            segment_cells
+        ):
+            relevant.append(
+                segment
+            )
+
+    if not relevant:
+        return {
+            "available": False,
+            "max_continuous_free_span_mm": None,
+            "major_segment_count": 0,
+            "two_ended_major_segment_count": 0,
+            "all_major_segments_two_ended": False,
+        }
+
+    # Major bridge lines represent actual spanning strokes.
+    # Small perimeter/connector fragments are intentionally excluded
+    # from the two-ended-anchor requirement.
+    major_threshold = max(
+        float(line_width_mm) * 2.0,
+        float(component_span_mm) * 0.25,
+    )
+
+    maximum_free_span = 0.0
+    major_count = 0
+    two_ended_major_count = 0
+
+    def nearest_distance(
+        point_x: float,
+        point_y: float,
+    ) -> float:
+
+        if not previous_model_segments:
+            return float("inf")
+
+        return min(
+            _point_to_segment_distance_xy(
+                point_x=point_x,
+                point_y=point_y,
+                segment=previous,
+            )
+            for previous
+            in previous_model_segments
+        )
+
+    for segment in relevant:
+        dx = (
+            float(segment.x2)
+            - float(segment.x1)
+        )
+
+        dy = (
+            float(segment.y2)
+            - float(segment.y1)
+        )
+
+        length = math.hypot(
+            dx,
+            dy,
+        )
+
+        if length <= 1e-12:
+            continue
+
+        steps = max(
+            1,
+            int(
+                math.ceil(
+                    length
+                    / max(
+                        float(sample_step_mm),
+                        0.005,
+                    )
+                )
+            ),
+        )
+
+        actual_step = (
+            length
+            / steps
+        )
+
+        longest_free_run = 0
+        current_free_run = 0
+
+        for index in range(
+            steps + 1
+        ):
+            ratio = (
+                index
+                / steps
+            )
+
+            x_value = (
+                float(segment.x1)
+                + dx * ratio
+            )
+
+            y_value = (
+                float(segment.y1)
+                + dy * ratio
+            )
+
+            supported = (
+                nearest_distance(
+                    x_value,
+                    y_value,
+                )
+                <= support_radius_mm
+                + 1e-9
+            )
+
+            if supported:
+                current_free_run = 0
+
+            if not supported:
+                current_free_run += 1
+                longest_free_run = max(
+                    longest_free_run,
+                    current_free_run,
+                )
+
+        # Multiplying by point count rather than count-1 is intentionally
+        # slightly conservative by at most one sampling interval.
+        free_span = (
+            longest_free_run
+            * actual_step
+        )
+
+        maximum_free_span = max(
+            maximum_free_span,
+            free_span,
+        )
+
+        if (
+            length + 1e-9
+            >= major_threshold
+        ):
+            major_count += 1
+
+            start_supported = (
+                nearest_distance(
+                    float(segment.x1),
+                    float(segment.y1),
+                )
+                <= support_radius_mm
+                + 1e-9
+            )
+
+            end_supported = (
+                nearest_distance(
+                    float(segment.x2),
+                    float(segment.y2),
+                )
+                <= support_radius_mm
+                + 1e-9
+            )
+
+            if (
+                start_supported
+                and end_supported
+            ):
+                two_ended_major_count += 1
+
+    return {
+        "available": True,
+        "max_continuous_free_span_mm": float(
+            maximum_free_span
+        ),
+        "major_segment_count": int(
+            major_count
+        ),
+        "two_ended_major_segment_count": int(
+            two_ended_major_count
+        ),
+        "all_major_segments_two_ended": bool(
+            major_count > 0
+            and
+            major_count
+            == two_ended_major_count
+        ),
+    }
+
+
+def _parse_declared_layer_heights(
+    text: str,
+) -> dict[float, float]:
+    """Parse only layer-level CHANGE_LAYER metadata."""
+
+    result: dict[float, float] = {}
+
+    pending = False
+    pending_z: float | None = None
+    pending_height: float | None = None
+
+    for raw in text.splitlines():
+
+        line = raw.strip()
+
+        if re.fullmatch(
+            r";\s*CHANGE_LAYER\s*",
+            line,
+            flags=re.I,
+        ):
+            pending = True
+            pending_z = None
+            pending_height = None
+            continue
+
+        if not pending:
+            continue
+
+        if not line.startswith(";"):
+            pending = False
+            pending_z = None
+            pending_height = None
+            continue
+
+        z_match = re.fullmatch(
+            r";\s*Z_HEIGHT\s*:\s*"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*",
+            line,
+            flags=re.I,
+        )
+
+        if z_match:
+            pending_z = float(
+                z_match.group(1)
+            )
+
+        h_match = re.fullmatch(
+            r";\s*LAYER_HEIGHT\s*:\s*"
+            r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*",
+            line,
+            flags=re.I,
+        )
+
+        if h_match:
+            pending_height = float(
+                h_match.group(1)
+            )
+
+        if (
+            pending_z is not None
+            and pending_height is not None
+        ):
+            if pending_height > 0.0:
+                result[
+                    round(
+                        pending_z,
+                        4,
+                    )
+                ] = pending_height
+
+            pending = False
+            pending_z = None
+            pending_height = None
+
+    return result
+
+
 def _recent_cells(
     history: Mapping[float, set[tuple[int, int]]],
     *,
@@ -195,6 +632,38 @@ def _component_features(
         for feature, cells in feature_cells.items()
         if component.intersection(cells)
     )
+
+
+def _continuous_local_support_covers(
+    component, current_segments, previous_model_segments, previous_support_segments,
+    *, cell_mm, model_radius_mm, support_radius_mm,
+) -> bool:
+    """Prove whole path coverage at the unchanged physical distance limits.
+
+    Diagonal raster boundaries can separate nearby paths. Never exempt small
+    areas or just check endpoints: reachable lower paths must cover EVERY
+    affected segment, including its interior. Inscribed polygonal buffers
+    conservatively approximate the physical distance disks.
+    """
+    from shapely.geometry import MultiLineString
+    from shapely.ops import unary_union
+
+    paths = [[(s.x1, s.y1), (s.x2, s.y2)] for s in current_segments
+             if _requires_local_support(s.feature)
+             and _segment_cells(s, cell_mm=cell_mm).intersection(component)]
+    if not paths:
+        return False
+    current = MultiLineString(paths)
+    x0, y0, x1, y1 = current.bounds
+    zones = []
+    for segments, radius in ((previous_model_segments, model_radius_mm),
+                             (previous_support_segments, support_radius_mm)):
+        nearby = [[(s.x1, s.y1), (s.x2, s.y2)] for s in segments
+                  if max(s.x1, s.x2) >= x0-radius and min(s.x1, s.x2) <= x1+radius
+                  and max(s.y1, s.y2) >= y0-radius and min(s.y1, s.y2) <= y1+radius]
+        if nearby:
+            zones.append(MultiLineString(nearby).buffer(radius, quad_segs=16))
+    return bool(zones and unary_union(zones).covers(current))
 
 
 def inspect_mesh_topology(
@@ -309,6 +778,7 @@ def inspect_final_gcode_printability(
     minimum_bad_component_mm2: float = 1.0,
     maximum_safe_bridge_span_mm: float = 8.0,
     minimum_build_plate_contact_mm2: float = 2.0,
+    credit_removable_support: bool = True,
 ) -> dict[str, Any]:
     """Validate physical FDM growth from the final sliced toolpath.
 
@@ -349,6 +819,12 @@ def inspect_final_gcode_printability(
                     "blockers": [f"project_settings_invalid:{type(exc).__name__}"],
                 }
         gcode_text = archive.read(gcodes[0]).decode("utf-8", errors="replace")
+
+    declared_layer_heights = (
+        _parse_declared_layer_heights(
+            gcode_text
+        )
+    )
 
     segments = parse_extrusion_segments(gcode_text)
     if not segments:
@@ -487,8 +963,38 @@ def inspect_final_gcode_printability(
     longest_bad_bridge = 0.0
     unsupported_island_count = 0
     unanchored_support_count = 0
+    continuous_bridge_anchor_rescue_count = 0
+    continuous_bridge_free_span_rescue_count = 0
+    continuous_local_support_rescue_count = 0
 
     for z_value in layers:
+        declared_layer_height = (
+            declared_layer_heights.get(
+                round(
+                    z_value,
+                    4,
+                )
+            )
+        )
+
+        current_layer_height = (
+            float(
+                declared_layer_height
+            )
+            if declared_layer_height is not None
+            else measured_layer_height
+        )
+
+        current_maximum_model_vertical_gap = max(
+            maximum_model_vertical_gap,
+            current_layer_height + 0.01,
+        )
+
+        current_self_support_xy_mm = max(
+            line_width * 0.65,
+            current_layer_height * 1.10,
+        )
+
         previous_support = _recent_cells(
             reachable_support,
             below_z=z_value,
@@ -517,11 +1023,11 @@ def inspect_final_gcode_printability(
         previous_model = _recent_cells(
             reachable_model,
             below_z=z_value,
-            maximum_gap_mm=maximum_model_vertical_gap,
+            maximum_gap_mm=current_maximum_model_vertical_gap,
         )
         model_support_zone = _dilate(
             previous_model,
-            radius_mm=self_support_xy_mm,
+            radius_mm=current_self_support_xy_mm,
             cell_mm=cell_mm,
         )
         nearby_support = _recent_cells(
@@ -534,7 +1040,7 @@ def inspect_final_gcode_printability(
             radius_mm=support_contact_xy_mm,
             cell_mm=cell_mm,
         )
-        accepted_zone = model_support_zone | physical_support_zone
+        accepted_zone = model_support_zone | (physical_support_zone if credit_removable_support else set())
         model_on_plate = (
             bool(model_layers)
             and z_value <= bed_model_z + measured_layer_height * 0.25
@@ -558,18 +1064,209 @@ def inspect_final_gcode_printability(
         )
         local_components = _components(unsupported_local)
 
-        bad_bridges: list[tuple[set[tuple[int, int]], float, int]] = []
-        for component in _components(bridge_cells[z_value]):
-            unsupported_bridge = component - accepted_zone
+        # Continuous prior-layer MODEL paths are retained only for a
+        # conservative second opinion when rasterisation makes a short
+        # bridge appear to have fewer than two anchors.
+        previous_model_segments_continuous: list[ExtrusionSegment] = []
+
+        for previous_z, previous_reachable in reachable_model.items():
+            gap = z_value - previous_z
+
+            if not (
+                0.0
+                < gap
+                <= current_maximum_model_vertical_gap + 1e-6
+            ):
+                continue
+
+            if not previous_reachable:
+                continue
+
+            for segment in by_z.get(previous_z, []):
+                feature = _feature_name(segment.feature)
+
+                if not _is_model(feature):
+                    continue
+
+                segment_cells = _segment_cells(
+                    segment,
+                    cell_mm=cell_mm,
+                )
+
+                if segment_cells and segment_cells.issubset(previous_reachable):
+                    previous_model_segments_continuous.append(
+                        segment
+                    )
+
+        if local_components:
+            prior_support_segments = []
+            if credit_removable_support:
+                for previous_z, previous_reachable in reachable_support.items():
+                    if not 0 < z_value-previous_z <= maximum_support_vertical_gap+1e-6:
+                        continue
+                    for segment in by_z[previous_z]:
+                        if not _is_support(segment.feature):
+                            continue
+                        cells = _segment_cells(segment, cell_mm=cell_mm)
+                        if cells and cells.issubset(previous_reachable):
+                            prior_support_segments.append(segment)
+            retained = []
+            for component in local_components:
+                if _continuous_local_support_covers(
+                    component, by_z[z_value], previous_model_segments_continuous, prior_support_segments,
+                    cell_mm=cell_mm, model_radius_mm=current_self_support_xy_mm,
+                    support_radius_mm=support_contact_xy_mm,
+                ):
+                    continuous_local_support_rescue_count += 1
+                else:
+                    retained.append(component)
+            local_components = retained
+
+        current_bridge_segments = [
+            segment
+            for segment in by_z[z_value]
+            if _is_bridge(
+                _feature_name(
+                    segment.feature
+                )
+            )
+        ]
+
+        bad_bridges: list[
+            tuple[
+                set[tuple[int, int]],
+                float,
+                int,
+            ]
+        ] = []
+
+        for component in _components(
+            bridge_cells[z_value]
+        ):
+            unsupported_bridge = (
+                component
+                - accepted_zone
+            )
+
             if not unsupported_bridge:
                 continue
-            span = _component_span(component, cell_mm)
-            contact_count = len(_components(component & accepted_zone))
-            if span > maximum_safe_bridge_span_mm or contact_count < 2:
-                bad_bridges.append(
-                    (unsupported_bridge, span, contact_count)
+
+            component_span = (
+                _component_span(
+                    component,
+                    cell_mm,
                 )
-                longest_bad_bridge = max(longest_bad_bridge, span)
+            )
+
+            contact_count = len(
+                _components(
+                    component
+                    & accepted_zone
+                )
+            )
+
+            bridge_is_safe = False
+            reported_bad_span = (
+                component_span
+            )
+
+            # Existing rule remains first:
+            # a conventionally short bridge with two raster anchors passes.
+            if (
+                component_span
+                <= maximum_safe_bridge_span_mm
+                and contact_count >= 2
+            ):
+                bridge_is_safe = True
+
+            # Fix #1:
+            # raster alias may merge/drop one anchor on an otherwise
+            # genuinely short, two-ended bridge.
+            if (
+                component_span
+                <= maximum_safe_bridge_span_mm
+                and contact_count < 2
+            ):
+                bridge_is_safe = (
+                    _continuous_bridge_has_two_model_anchors(
+                        component,
+                        current_bridge_segments,
+                        previous_model_segments_continuous,
+                        cell_mm=cell_mm,
+                        support_radius_mm=current_self_support_xy_mm,
+                        component_span_mm=component_span,
+                        line_width_mm=line_width,
+                    )
+                )
+
+                if bridge_is_safe:
+                    continuous_bridge_anchor_rescue_count += 1
+
+            # Fix #2:
+            # For a large slicer "bridge" region, the bounding-box span
+            # may include many sparse-infill-supported subspans. Measure
+            # the longest actual consecutive unsupported run instead.
+            #
+            # The 8mm policy itself is NOT relaxed.
+            if (
+                component_span
+                > maximum_safe_bridge_span_mm
+            ):
+                free_span_report = (
+                    _continuous_bridge_free_span_report(
+                        component,
+                        current_bridge_segments,
+                        previous_model_segments_continuous,
+                        cell_mm=cell_mm,
+                        support_radius_mm=current_self_support_xy_mm,
+                        component_span_mm=component_span,
+                        line_width_mm=line_width,
+                    )
+                )
+
+                effective_span = (
+                    free_span_report.get(
+                        "max_continuous_free_span_mm"
+                    )
+                )
+
+                if effective_span is not None:
+                    reported_bad_span = float(
+                        effective_span
+                    )
+
+                bridge_is_safe = bool(
+                    free_span_report.get(
+                        "available"
+                    )
+                    and
+                    free_span_report.get(
+                        "all_major_segments_two_ended"
+                    )
+                    and
+                    effective_span is not None
+                    and
+                    float(effective_span)
+                    <= maximum_safe_bridge_span_mm
+                    + 1e-9
+                )
+
+                if bridge_is_safe:
+                    continuous_bridge_free_span_rescue_count += 1
+
+            if not bridge_is_safe:
+                bad_bridges.append(
+                    (
+                        unsupported_bridge,
+                        reported_bad_span,
+                        contact_count,
+                    )
+                )
+
+                longest_bad_bridge = max(
+                    longest_bad_bridge,
+                    reported_bad_span,
+                )
 
         layer_records: list[dict[str, Any]] = []
         for component in layer_islands:
@@ -678,11 +1375,19 @@ def inspect_final_gcode_printability(
         "total_bad_area_mm2": unsupported_area_total,
         "worst_bad_area_mm2": worst_unsupported_area,
         "longest_bad_bridge_mm": longest_bad_bridge,
+        "continuous_bridge_anchor_rescue_count": (
+            continuous_bridge_anchor_rescue_count
+        ),
+        "continuous_bridge_free_span_rescue_count": (
+            continuous_bridge_free_span_rescue_count
+        ),
+        "continuous_local_support_rescue_count": continuous_local_support_rescue_count,
         "dangerous_layer_count": len(dangerous_layers),
         "dangerous_layers": dangerous_layers[:100],
         "mesh_topology": topology,
         "policy": {
             "gate_semantics": "layer_support_connectivity_v2",
+            "credit_removable_support": credit_removable_support,
             "cell_mm": cell_mm,
             "line_width_mm": line_width,
             "configured_layer_height_mm": configured_layer_height,

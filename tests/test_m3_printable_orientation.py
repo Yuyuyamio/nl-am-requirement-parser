@@ -43,6 +43,7 @@ class PrintableOrientationTests(
                 input_path=source,
                 output_path=output,
                 report_path=report,
+                preserve_upright=False,  # This test explicitly requests arbitrary mechanical reorientation.
             )
 
             self.assertEqual(

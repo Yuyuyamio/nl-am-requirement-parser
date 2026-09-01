@@ -7,6 +7,7 @@
     <meta name="description" content="用自然语言把想法直接变成 3D 打印成品。">
     <title>造物台 · 自动 3D 打印</title>
     <link rel="stylesheet" href="/styles.css">
+    <script src="/model-preview.js" defer></script>
     <script src="/app.js" defer></script>
   </head>
   <body>
@@ -43,18 +44,20 @@
           </div>
           <div class="top-actions">
             <label class="mode-pill" for="autoPrintToggle">
-              <input id="autoPrintToggle" type="checkbox" checked>
+              <input id="autoPrintToggle" type="checkbox">
               <span class="switch" aria-hidden="true"></span>
               <span>自动打印</span>
             </label>
             <button class="ghost-button" id="detailsButton" type="button" disabled>任务详情</button>
+            <a class="guide-link" href="/guide" target="_blank" rel="noopener">使用流程</a>
           </div>
         </header>
 
         <section class="welcome" id="welcome">
           <p class="welcome-kicker">从一句话开始</p>
           <h2>今天想创造什么？</h2>
-          <p class="welcome-copy">描述物品、尺寸和风格，剩下的模型生成、自动摆放、切片与打印都交给我。</p>
+          <p class="welcome-copy">描述物品、尺寸和姿态。默认先生成、检查并提供成品下载，不启动打印机。</p>
+          <p class="workflow-note">生成模型 → 平底与姿态修复 → 可拆支撑 → Auto Orient → 重切复检 → 成品下载<br>生成期间请关闭 Bambu Studio 窗口；完成后再打开文件检查。</p>
           <div class="suggestions" aria-label="示例需求">
             <button type="button" data-prompt="打印一个 12 厘米高的极简螺旋花瓶，底部要稳，适合放在书桌上。">
               <span>01</span><strong>螺旋花瓶</strong><small>极简 · 12 cm</small>
@@ -101,6 +104,24 @@
                 <p>请在下方输入补充后的完整需求，再新建任务。</p>
               </div>
 
+              <section class="delivery-card hidden" id="deliveryCard" aria-label="最终成品">
+                <h3>最终成品</h3>
+                <p id="deliveryMessage"></p>
+                <div class="preview-controls hidden" id="previewControls">
+                  <label><input id="supportVisibility" type="checkbox" checked> 显示真实可拆支撑</label>
+                  <div aria-label="预览视角">
+                    <button type="button" data-preview-view="three">立体</button>
+                    <button type="button" data-preview-view="front">正面</button>
+                    <button type="button" data-preview-view="side">侧面</button>
+                  </div>
+                </div>
+                <canvas id="modelPreview" class="hidden" aria-label="最终打印预览：蓝色模型与真实可拆支撑，可拖动旋转" width="600" height="330"></canvas>
+                <div class="preview-legend hidden" id="previewLegend"><span class="body">成品本体</span><span class="support">可拆支撑</span><span class="interface">接触界面</span></div>
+                <p id="previewHint" class="preview-hint"></p>
+                <div id="deliveryLinks" class="delivery-links"></div>
+                <button class="control hidden" id="printButton" type="button">确认并开始打印</button>
+              </section>
+
               <div class="progress-card">
                 <div class="progress-head">
                   <span id="progressLabel">总进度</span>
@@ -136,7 +157,7 @@
             <div class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
             <span id="voiceStatus">录音结束后会在本机转成可编辑文字</span>
           </div>
-          <div class="composer-note">AI 会自动生成、校验、切片并发送到打印机；开始前请确保打印平台已清空。</div>
+          <div class="composer-note">默认只生成文件。模型生成不保证每次通过；检查失败会停止。实际打印前请核对材料、喷嘴和首层。</div>
         </div>
       </main>
     </div>
@@ -151,6 +172,7 @@
           <label>
             <span>打印机 IP</span>
             <input id="printerIpInput" name="printer_ip" inputmode="decimal" autocomplete="off" value="172.16.61.6" required>
+            <small>请以打印机“设置 → 网络”当前显示的 IPv4 地址为准；路由器重新分配地址后，这里也要更新。</small>
           </label>
           <label>
             <span>Device ID / Serial</span>
@@ -199,6 +221,16 @@
       <div>
         <button id="cancelStop" type="button">继续运行</button>
         <button class="danger-button" id="confirmStop" type="button">确认停止</button>
+      </div>
+    </dialog>
+
+    <dialog class="confirm-dialog delete-dialog" id="deleteDialog">
+      <div class="confirm-icon" aria-hidden="true">删</div>
+      <h3>删除这条对话？</h3>
+      <p id="deleteDialogText"></p>
+      <div>
+        <button id="cancelDelete" type="button">取消</button>
+        <button class="danger-button" id="confirmDelete" type="button">删除对话</button>
       </div>
     </dialog>
 

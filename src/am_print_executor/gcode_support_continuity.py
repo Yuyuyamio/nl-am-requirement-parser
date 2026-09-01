@@ -18,10 +18,12 @@ class ExtrusionSegment:
     x2: float
     y2: float
     feature: str
+    line_width_mm: float | None = None
+    layer_height_mm: float | None = None
 
 
 _COORD_RE = re.compile(
-    r"([XYZEF])([-+]?(?:\d+(?:\.\d*)?|\.\d+))"
+    r"([XYZEFIJKP])([-+]?(?:\d+(?:\.\d*)?|\.\d+))"
 )
 
 
@@ -80,6 +82,242 @@ def _is_risk_feature(
     )
 
 
+def _arc_sweep(
+    start_angle: float,
+    end_angle: float,
+    *,
+    clockwise: bool,
+    full_circle: bool = False,
+    turns: int = 1,
+) -> float:
+
+    tau = 2.0 * math.pi
+
+    if full_circle:
+        magnitude = (
+            tau
+            * max(
+                1,
+                turns,
+            )
+        )
+
+        return (
+            -magnitude
+            if clockwise
+            else magnitude
+        )
+
+    if clockwise:
+        magnitude = (
+            start_angle
+            - end_angle
+        ) % tau
+
+        if magnitude <= 1e-12:
+            magnitude = tau
+
+        if turns > 1:
+            magnitude += (
+                tau
+                * (
+                    turns - 1
+                )
+            )
+
+        return -magnitude
+
+    magnitude = (
+        end_angle
+        - start_angle
+    ) % tau
+
+    if magnitude <= 1e-12:
+        magnitude = tau
+
+    if turns > 1:
+        magnitude += (
+            tau
+            * (
+                turns - 1
+            )
+        )
+
+    return magnitude
+
+
+def _linearise_xy_arc(
+    *,
+    start_x: float,
+    start_y: float,
+    start_z: float,
+    end_x: float,
+    end_y: float,
+    end_z: float,
+    values: dict[str, float],
+    clockwise: bool,
+) -> list[tuple[float, float, float]]:
+    """Linearise a G17 I/J extrusion arc for occupancy analysis."""
+
+    if (
+        "I" not in values
+        and "J" not in values
+    ):
+        return [
+            (
+                end_x,
+                end_y,
+                end_z,
+            )
+        ]
+
+    center_x = (
+        start_x
+        + values.get(
+            "I",
+            0.0,
+        )
+    )
+
+    center_y = (
+        start_y
+        + values.get(
+            "J",
+            0.0,
+        )
+    )
+
+    radius = math.hypot(
+        start_x - center_x,
+        start_y - center_y,
+    )
+
+    if radius <= 1e-12:
+        return [
+            (
+                end_x,
+                end_y,
+                end_z,
+            )
+        ]
+
+    start_angle = math.atan2(
+        start_y - center_y,
+        start_x - center_x,
+    )
+
+    end_angle = math.atan2(
+        end_y - center_y,
+        end_x - center_x,
+    )
+
+    full_circle = (
+        math.hypot(
+            end_x - start_x,
+            end_y - start_y,
+        )
+        <= 1e-9
+    )
+
+    turns = max(
+        1,
+        int(
+            round(
+                abs(
+                    values.get(
+                        "P",
+                        1.0,
+                    )
+                )
+            )
+        ),
+    )
+
+    sweep = _arc_sweep(
+        start_angle,
+        end_angle,
+        clockwise=clockwise,
+        full_circle=full_circle,
+        turns=turns,
+    )
+
+    arc_length = (
+        abs(
+            sweep
+        )
+        * radius
+    )
+
+    segment_count = max(
+        1,
+        int(
+            math.ceil(
+                arc_length / 0.20
+            )
+        ),
+        int(
+            math.ceil(
+                abs(sweep)
+                / math.radians(10.0)
+            )
+        ),
+    )
+
+    points = []
+
+    for index in range(
+        1,
+        segment_count + 1,
+    ):
+        ratio = (
+            index
+            / segment_count
+        )
+
+        angle = (
+            start_angle
+            + sweep * ratio
+        )
+
+        point_x = (
+            center_x
+            + radius
+            * math.cos(angle)
+        )
+
+        point_y = (
+            center_y
+            + radius
+            * math.sin(angle)
+        )
+
+        point_z = (
+            start_z
+            + (
+                end_z
+                - start_z
+            )
+            * ratio
+        )
+
+        points.append(
+            (
+                point_x,
+                point_y,
+                point_z,
+            )
+        )
+
+    if points:
+        points[-1] = (
+            end_x,
+            end_y,
+            end_z,
+        )
+
+    return points
+
+
 def parse_extrusion_segments(
     text: str,
 ) -> list[ExtrusionSegment]:
@@ -92,7 +330,10 @@ def parse_extrusion_segments(
     xyz_absolute = True
     e_absolute = True
 
+    plane = "G17"
     feature = "unknown"
+    line_width_mm = None
+    layer_height_mm = None
 
     result: list[ExtrusionSegment] = []
 
@@ -104,15 +345,21 @@ def parse_extrusion_segments(
             continue
 
         if line.startswith(";"):
-            m = re.match(
+            dimension = re.match(r";\s*(LINE_WIDTH|LAYER_HEIGHT)\s*:\s*([\d.]+)", line, re.I)
+            if dimension:
+                if dimension.group(1).upper() == "LINE_WIDTH":
+                    line_width_mm = float(dimension.group(2))
+                else:
+                    layer_height_mm = float(dimension.group(2))
+            match = re.match(
                 r";\s*(?:FEATURE|TYPE)\s*:\s*(.+)",
                 line,
                 flags=re.I,
             )
 
-            if m:
+            if match:
                 feature = _normalise_feature(
-                    m.group(1)
+                    match.group(1)
                 )
 
             continue
@@ -122,32 +369,46 @@ def parse_extrusion_segments(
             1,
         )[0].strip()
 
-        if command == "G90":
+        if not command:
+            continue
+
+        opcode = command.split(
+            None,
+            1,
+        )[0].upper()
+
+        if opcode == "G90":
             xyz_absolute = True
             continue
 
-        if command == "G91":
+        if opcode == "G91":
             xyz_absolute = False
             continue
 
-        if command == "M82":
+        if opcode == "M82":
             e_absolute = True
             continue
 
-        if command == "M83":
+        if opcode == "M83":
             e_absolute = False
             continue
 
-        if command.startswith("G92"):
+        if opcode in (
+            "G17",
+            "G18",
+            "G19",
+        ):
+            plane = opcode
+            continue
+
+        if opcode == "G92":
             values = {
-                k: float(v)
-                for k, v in _COORD_RE.findall(
+                key: float(value)
+                for key, value
+                in _COORD_RE.findall(
                     command
                 )
             }
-
-            if "E" in values:
-                e = values["E"]
 
             if "X" in values:
                 x = values["X"]
@@ -158,17 +419,27 @@ def parse_extrusion_segments(
             if "Z" in values:
                 z = values["Z"]
 
+            if "E" in values:
+                e = values["E"]
+
             continue
 
-        if not (
-            command.startswith("G0 ")
-            or command.startswith("G1 ")
+        if opcode not in (
+            "G0",
+            "G00",
+            "G1",
+            "G01",
+            "G2",
+            "G02",
+            "G3",
+            "G03",
         ):
             continue
 
         values = {
-            k: float(v)
-            for k, v in _COORD_RE.findall(
+            key: float(value)
+            for key, value
+            in _COORD_RE.findall(
                 command
             )
         }
@@ -176,7 +447,6 @@ def parse_extrusion_segments(
         old_x = x
         old_y = y
         old_z = z
-        old_e = e
 
         if "X" in values:
             x = (
@@ -214,26 +484,96 @@ def parse_extrusion_segments(
 
             e = new_e
 
-        else:
+        if "E" not in values:
             delta_e = 0.0
+
+        # All physical G0/G1/G2/G3 motion has now advanced
+        # the machine state. Travel/lift without positive E
+        # creates no extrusion geometry.
+        if delta_e <= 1e-7:
+            continue
+
+        is_arc = opcode in (
+            "G2",
+            "G02",
+            "G3",
+            "G03",
+        )
+
+        if (
+            is_arc
+            and plane == "G17"
+        ):
+            points = _linearise_xy_arc(
+                start_x=old_x,
+                start_y=old_y,
+                start_z=old_z,
+                end_x=x,
+                end_y=y,
+                end_z=z,
+                values=values,
+                clockwise=opcode
+                in (
+                    "G2",
+                    "G02",
+                ),
+            )
+
+            previous_x = old_x
+            previous_y = old_y
+
+            for (
+                point_x,
+                point_y,
+                point_z,
+            ) in points:
+
+                distance = math.hypot(
+                    point_x - previous_x,
+                    point_y - previous_y,
+                )
+
+                if distance > 1e-6:
+                    result.append(
+                        ExtrusionSegment(
+                            z=round(
+                                point_z,
+                                4,
+                            ),
+                            x1=previous_x,
+                            y1=previous_y,
+                            x2=point_x,
+                            y2=point_y,
+                            feature=feature,
+                            line_width_mm=line_width_mm,
+                            layer_height_mm=layer_height_mm,
+                        )
+                    )
+
+                previous_x = point_x
+                previous_y = point_y
+
+            continue
 
         distance = math.hypot(
             x - old_x,
             y - old_y,
         )
 
-        if (
-            delta_e > 1e-7
-            and distance > 1e-6
-        ):
+        if distance > 1e-6:
             result.append(
                 ExtrusionSegment(
-                    z=round(z, 4),
+                    z=round(
+                        z,
+                        4,
+                    ),
                     x1=old_x,
                     y1=old_y,
                     x2=x,
                     y2=y,
                     feature=feature,
+                    line_width_mm=line_width_mm,
+                    layer_height_mm=layer_height_mm,
                 )
             )
 

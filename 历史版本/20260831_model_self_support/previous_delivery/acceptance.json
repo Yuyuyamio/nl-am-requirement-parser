@@ -1,0 +1,396 @@
+{
+  "status": "pass",
+  "supersedes": "20260831_mouse_verified (rejected: back was treated as the bottom)",
+  "semantic_pose": {
+    "source": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\tests\\fixtures\\flat_base_regression_current_mouse\\current_mouse_curved_base.glb",
+    "sha256": "77036a8a5be6bf308d8ad31f6354354eb2a7f0f9e1bf8705d1d9e66c1fc96fe0",
+    "source_up_axis": "+Y",
+    "print_up_axis": "+Z",
+    "transform": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        -1.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "scale": 0.9621347953011219,
+    "visual_review": "head above torso; ears vertical; rump and rear feet down; face forward; tail low",
+    "target_height_mm": 30.0,
+    "status": "anatomical_pose_reviewed"
+  },
+  "orientation_preservation": {
+    "status": "pass",
+    "source_up_axis": "+Z",
+    "mapped_up_vector": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "tilt_degrees": 0.0,
+    "maximum_tilt_degrees": 1.0,
+    "source_local_frame_error_mm": 7.538889505302536e-08,
+    "source_to_world_row_vector": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        -5.987221527448128e-06,
+        1.3374093029483447e-05,
+        -7.246168109986684e-10,
+        1.0
+      ]
+    ],
+    "semantics": "preserve_reviewed_upright_source; yaw_and_translation_only"
+  },
+  "flat_base": {
+    "status": "pass",
+    "base_flatness_passed": true,
+    "blockers": [],
+    "geometry": null,
+    "bed_contact_area_mm2": 734.8947883645887,
+    "required_contact_area_mm2": 9.617813455956057,
+    "largest_contact_patch_area_mm2": 734.8947883645887,
+    "contact_patch_count": 1,
+    "dominant_contact_patch_ratio": 1.0,
+    "fitted_base_plane": {
+      "normal": [
+        -0.0,
+        -0.0,
+        1.0
+      ],
+      "offset": -0.0,
+      "z_equals": {
+        "x_coefficient": 0.0,
+        "y_coefficient": 0.0,
+        "intercept": 0.0
+      }
+    },
+    "max_plane_deviation_mm": 0.0,
+    "base_height_range_mm": 0.0,
+    "base_plane_tilt_degrees": 0.0,
+    "stability": {
+      "center_of_mass_xy_mm": [
+        128.76867391305717,
+        128.86278705308834
+      ],
+      "center_of_mass_inside_support_polygon": true,
+      "stability_margin_mm": 13.114440568169195,
+      "required_stability_margin_mm": 0.8999999999999999
+    },
+    "minimum_z_mm": 0.0,
+    "footprint_area_mm2": 961.7813455956057,
+    "final_extents_mm": [
+      31.608612060546875,
+      30.427825927734375,
+      30.0
+    ],
+    "policy": {
+      "contact_tolerance_mm": 0.001,
+      "maximum_plane_deviation_mm": 0.15,
+      "minimum_contact_area_mm2": 2.0,
+      "minimum_footprint_ratio": 0.01,
+      "minimum_dominant_patch_ratio": 0.8,
+      "maximum_plane_tilt_degrees": 2.0,
+      "minimum_stability_margin_mm": 0.8
+    }
+  },
+  "strict_gate": {
+    "status": "pass",
+    "blockers": [],
+    "artifact": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\semantic_pose_repair\\upright_20260831_105442\\verified_preparation_7do1bmil\\orientation_3\\final_slice\\candidate.gcode.3mf",
+    "geometry": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\semantic_pose_repair\\upright_20260831_105442\\verified_preparation_7do1bmil\\orientation_3\\final_slice\\candidate.stl",
+    "gcode_entry": "Metadata/plate_1.gcode",
+    "layer_count": 160,
+    "model_layer_count": 150,
+    "segment_count": 110962,
+    "feature_segment_counts": {
+      "bottom surface": 139,
+      "bridge": 228,
+      "custom": 124,
+      "floating vertical shell": 13193,
+      "gap infill": 2759,
+      "inner wall": 31003,
+      "internal solid infill": 3449,
+      "outer wall": 32970,
+      "overhang wall": 435,
+      "sparse infill": 17320,
+      "support": 6259,
+      "support interface": 2429,
+      "support transition": 372,
+      "top surface": 282
+    },
+    "support_xy_length_mm": 9668.32440958909,
+    "build_plate_contact_area_mm2": 700.48,
+    "unsupported_layer_island_count": 0,
+    "unanchored_support_component_count": 0,
+    "total_bad_area_mm2": 0.0,
+    "worst_bad_area_mm2": 0.0,
+    "longest_bad_bridge_mm": 0.0,
+    "continuous_bridge_anchor_rescue_count": 0,
+    "continuous_bridge_free_span_rescue_count": 0,
+    "dangerous_layer_count": 0,
+    "dangerous_layers": [],
+    "mesh_topology": {
+      "status": "pass",
+      "blockers": [],
+      "geometry": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\semantic_pose_repair\\upright_20260831_105442\\verified_preparation_7do1bmil\\orientation_3\\final_slice\\candidate.stl",
+      "face_count": 5562,
+      "component_count": 1,
+      "floating_component_count": 0,
+      "watertight": true,
+      "bounds_mm": [
+        [
+          112.19729614257812,
+          112.78501892089844,
+          0.0
+        ],
+        [
+          143.805908203125,
+          143.2128448486328,
+          30.0
+        ]
+      ],
+      "build_plate_contact_area_mm2": 734.8947883645887,
+      "components": [
+        {
+          "index": 0,
+          "face_count": 5562,
+          "minimum_z_mm": 0.0,
+          "maximum_z_mm": 30.0,
+          "watertight": true,
+          "floating": false
+        }
+      ],
+      "policy": {
+        "build_plate_tolerance_mm": 0.25,
+        "minimum_build_plate_contact_mm2": 2.0
+      }
+    },
+    "policy": {
+      "gate_semantics": "layer_support_connectivity_v2",
+      "cell_mm": 0.4,
+      "line_width_mm": 0.42,
+      "configured_layer_height_mm": 0.2,
+      "measured_layer_height_mm": 0.1999999999999993,
+      "self_support_xy_mm": 0.273,
+      "support_growth_xy_mm": 0.63,
+      "support_top_z_distance_mm": 0.2,
+      "support_bottom_z_distance_mm": 0.2,
+      "maximum_support_vertical_gap_mm": 0.4999999999999991,
+      "support_contact_xy_mm": 0.5599999999999999,
+      "maximum_safe_bridge_span_mm": 8.0,
+      "minimum_build_plate_contact_mm2": 2.0,
+      "unsupported_component_area_exemption_mm2": 0.0,
+      "legacy_minimum_bad_component_mm2_ignored": 1.0
+    },
+    "next_module": "M4",
+    "resolution": "physical_printability_verified"
+  },
+  "before_orientation_status": "pass",
+  "after_orientation_status": "pass",
+  "source_glb_unchanged": true,
+  "hashes": {
+    "mouse_seated_30mm.stl": "f2aa44c1403dd90991e464f7ddc98f99f6711ffd536c215f6b2fae7f5a4d0c11",
+    "mouse_seated_30mm.3mf": "cb0641f3cbbb823a0d8addf3789a0be37bc3d2813ae17cad25e80fba0639313c",
+    "mouse_seated_30mm.gcode.3mf": "e9232fe31273efd1c8aa86076d76924121723d73c2467616b0c292759ebfa127",
+    "seated_model_and_supports.png": "7d87246150dada56d5a2fb8171449a58397813134267bf69554752025c827851",
+    "ear_support_detail.png": "4170336fbc709e0550362293a8417105345982377345b5e5bed89147212d8278"
+  },
+  "regressions": {
+    "tests": 125,
+    "passed": true,
+    "suites": [
+      {
+        "pattern": "test_flat_base_gate.py",
+        "tests": 8,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m4_bambu_auto_orient.py",
+        "tests": 6,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_verified_print_preparation.py",
+        "tests": 8,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_general_printability_geometry_repair*.py",
+        "tests": 10,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_geometry_fidelity_gate.py",
+        "tests": 14,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_local_self_support_envelope.py",
+        "tests": 3,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_printability_blocker_clustering.py",
+        "tests": 5,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_printability_support_enforcer.py",
+        "tests": 2,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_fdm_layer_printability_gate.py",
+        "tests": 12,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_variable_layer_height_printability.py",
+        "tests": 2,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_normalization.py",
+        "tests": 5,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_normalized_validation.py",
+        "tests": 4,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_fdm_prompt_contract*.py",
+        "tests": 6,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_providers.py",
+        "tests": 7,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_automatic_print_workflow.py",
+        "tests": 16,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_gcode_motion_state_parser.py",
+        "tests": 3,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_semantic_pose.py",
+        "tests": 4,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_triposg_local_provider.py",
+        "tests": 5,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_stl_handoff.py",
+        "tests": 1,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_normalization_pipeline_v2.py",
+        "tests": 2,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m3_printable_orientation.py",
+        "tests": 1,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_mesh_repair_pipeline.py",
+        "tests": 1,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      }
+    ]
+  },
+  "physical_print_performed": false,
+  "printer_contacted": false,
+  "preparation_directory": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\semantic_pose_repair\\upright_20260831_105442\\verified_preparation_7do1bmil"
+}

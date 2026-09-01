@@ -21,12 +21,13 @@ _DEFAULT_PROMPT_LIMIT = 600
 
 _MANDATORY_FDM_CONTRACT = (
     "FDM-printable single watertight solid; "
-    "use continuous layer-supported geometry; "
-    "avoid long unsupported cantilever features; "
-    "avoid isolated appendages beginning in free air; "
-    "minimize downward-facing overhang surfaces; "
-    "keep protrusions robust and connected to the main body; "
-    "use a stable base and preserve object identity and requested dimensions."
+    "upright with feet or rump down on a continuous planar bottom; "
+    "stable center of mass; "
+    "avoid unsupported cantilever features and isolated appendages; "
+    "robust overhang roots; "
+    "finished object only, never temporary support pillars; "
+    "accessible undersides for removable slicer supports; "
+    "preserve identity and dimensions."
 )
 
 _DEFAULT_FDM_GUIDANCE = (
@@ -211,7 +212,7 @@ def _repair_feedback_guidance(
         "blocked",
     }:
         guidance.append(
-            "Previous slicing found unsupported regions; redesign the geometry rather than relying on extra support."
+            "Previous slicing failed validation; redesign unsafe or inaccessible overhangs without welding temporary support pillars into the finished object."
         )
 
     observations = feedback.get(
@@ -267,7 +268,7 @@ def _compose_generation_prompt(
     )
 
     mandatory = (
-        "Manufacturing constraints: "
+        "FDM constraints: "
         + _MANDATORY_FDM_CONTRACT
     )
 

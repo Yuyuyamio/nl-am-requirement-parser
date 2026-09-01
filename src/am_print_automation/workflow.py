@@ -150,8 +150,13 @@ class AutomationConfig:
     remote_name: str | None = None
     minimum_unsupported_component_mm2: float = 5.0
     maximum_safe_bridge_span_mm: float = 8.0
+    # Temporary slicer supports are default. Fused buttresses require opt-in.
+    allow_structural_geometry_changes: bool = True
+    support_mode: str = "detachable"
 
     def __post_init__(self) -> None:
+        from am_print_executor.detachable_support import validate_support_mode
+        validate_support_mode(self.support_mode)
         if self.provider_poll_interval_seconds <= 0:
             raise ValueError(
                 "provider_poll_interval_seconds must be positive"
@@ -324,6 +329,18 @@ def _json_ready(value: Any) -> Any:
 _ATOMIC_WRITE_LOCK = threading.RLock()
 _ATOMIC_REPLACE_ATTEMPTS = 10
 _ATOMIC_REPLACE_INITIAL_DELAY_SECONDS = 0.02
+
+MAX_GEOMETRY_REGENERATION_ATTEMPTS = 1
+
+_GEOMETRY_REGENERATION_GUIDANCE = (
+    "Generate one connected printable solid.",
+    "Blend every protruding feature continuously into the main body.",
+    "Do not begin appendages or decorative features in free air.",
+    "Avoid long unsupported horizontal undersides and cantilevers.",
+    "Use thick gradual self-supporting roots for protruding features.",
+    "Preserve the requested appearance while prioritizing FDM-printable geometry.",
+    "Do not add external support pillars, sacrificial columns, or a pedestal.",
+)
 
 
 def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -616,6 +633,34 @@ class _JobState:
         )
 
 
+def _validate_prepared_slice(services, prepared, artifact, geometry):
+    """Never promote an intermediate PASS from a rejected preparation run."""
+    report=services.validate_gcode(artifact,geometry)
+    if prepared.get("pipeline"):
+        receipt=prepared.get("acceptance") or {}
+        # Legacy receipts only describe permanent support. They may never be
+        # reused as evidence of detachable support for a new production job.
+        mode = prepared.get("support_mode", "permanent")
+        configured_mode = getattr(getattr(services, "config", None), "support_mode", None)
+        mode_matches = configured_mode not in ("detachable", "permanent") or configured_mode == mode
+        policy_valid = (mode in ("detachable", "permanent") and mode_matches
+            and receipt.get("support_mode", "permanent") == mode
+            and prepared.get("model_self_support_required") is (mode == "permanent")
+            and receipt.get("model_self_support_required") is (mode == "permanent")
+            and (mode != "detachable" or (receipt.get("removal") or {}).get("status") == "pass"))
+        valid=(prepared.get("status")=="slice_complete"
+               and policy_valid
+               and receipt.get("status")=="pass"
+               and receipt.get("artifact_sha256")==hashlib.sha256(Path(artifact).read_bytes()).hexdigest()
+               and receipt.get("geometry_sha256")==hashlib.sha256(Path(geometry).read_bytes()).hexdigest())
+        if not valid:
+            report=dict(report)
+            report.update(status="blocked",resolution="needs_geometry_regeneration",next_module="M2_REPAIR")
+            report["blockers"]=[*report.get("blockers",[]),"missing_or_rejected_final_preparation_receipt"]
+            report["preparation_blocker"]=prepared.get("terminal_blocker")
+    return report
+
+
 class ProductionServices:
     """Connect the state machine to the project's existing production APIs."""
 
@@ -746,15 +791,17 @@ class ProductionServices:
         return create_m2_stl_handoff(task_dir)
 
     def slice_stl(self, stl_path: Path, output_path: Path) -> dict[str, Any]:
-        from am_print_executor.developer_mode_backend_v1120 import slice_with_bambu_cli
+        from am_print_executor.verified_print_preparation import prepare_verified_print
 
-        return slice_with_bambu_cli(
+        return prepare_verified_print(
             stl_path,
             output_path,
             studio_exe=self.config.studio_exe,
             machine_json=self.config.machine_profile,
             process_json=self.config.process_profile,
             filament_jsons=self.config.filament_profiles or None,
+            allow_structural_changes=self.config.allow_structural_geometry_changes,
+            support_mode=self.config.support_mode,
         )
 
     def validate_gcode(
@@ -769,6 +816,7 @@ class ProductionServices:
         result = inspect_final_gcode_printability(
             gcode_path,
             geometry_path=geometry_path,
+            credit_removable_support=self.config.support_mode == "detachable",
             minimum_bad_component_mm2=(
                 self.config.minimum_unsupported_component_mm2
             ),
@@ -778,6 +826,20 @@ class ProductionServices:
         )
         result["module"] = "M3"
         result["stage"] = "final_gcode_printability"
+        if self.config.support_mode == "detachable":
+            from am_print_executor.detachable_support import inspect_detachable_support
+            removal = inspect_detachable_support(gcode_path, geometry_path=geometry_path)
+            result["removal"] = removal
+            if removal["status"] != "pass":
+                result["status"] = "blocked"
+                result.setdefault("blockers", []).extend(removal["blockers"])
+        from am_print_executor.flat_base_gate import inspect_flat_printing_base
+        from am_print_executor.slice_geometry_frame import placed_mesh_from_project
+        flat_base = inspect_flat_printing_base(placed_mesh_from_project(gcode_path))
+        result["flat_base"] = flat_base
+        if not flat_base["base_flatness_passed"]:
+            result["status"] = "blocked"
+            result.setdefault("blockers", []).append("final_placed_geometry_has_no_stable_flat_base")
         return result
 
     def slice_stl_with_support(
@@ -785,11 +847,22 @@ class ProductionServices:
         stl_path: Path,
         output_path: Path,
     ) -> dict[str, Any]:
+        # The verified preparer already spent its two repair rounds. The old
+        # support fallback must not restart that budget on a modified result.
+        for parent in list(Path(stl_path).resolve().parents)[:4]:
+            saved=parent / "result.json"
+            if not saved.is_file() or not (parent / "preparation.json").is_file():
+                continue
+            previous=json.loads(saved.read_text(encoding="utf-8"))
+            if (previous.get("pipeline") in {"model_self_support_orient_reslice_v2", "verified_support_orient_reslice_v3"}
+                    and previous.get("status")=="blocked"
+                    and Path(previous.get("geometry_path","")).resolve()==Path(stl_path).resolve()):
+                return {**previous,"repair_retry_skipped":True,
+                        "terminal_blocker":previous.get("terminal_blocker") or "bounded_repair_already_exhausted"}
         from am_print_executor.developer_mode_backend_v1120 import (
             DeveloperBackendError,
             discover_bambu_profiles,
             discover_bambu_studio,
-            slice_with_bambu_cli,
         )
         from am_print_executor.m3_manufacturability_pipeline import (
             build_conservative_process_profile,
@@ -809,13 +882,16 @@ class ProductionServices:
             source_profile=Path(source_process),
             output_profile=support_profile,
         )
-        return slice_with_bambu_cli(
+        from am_print_executor.verified_print_preparation import prepare_verified_print
+        return prepare_verified_print(
             stl_path,
             output_path,
             studio_exe=Path(studio),
             machine_json=self.config.machine_profile,
             process_json=support_profile,
             filament_jsons=self.config.filament_profiles or None,
+            allow_structural_changes=self.config.allow_structural_geometry_changes,
+            support_mode=self.config.support_mode,
         )
 
     def upload_gcode(
@@ -851,6 +927,110 @@ class ProductionServices:
         )
 
 
+def _geometry_regeneration_feedback(
+    printability: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw = printability.get(
+        "feedback_to_m2"
+    )
+
+    source_feedback = (
+        dict(raw)
+        if isinstance(raw, Mapping)
+        else {}
+    )
+
+    reason_value = source_feedback.get(
+        "reason"
+    )
+
+    reason = (
+        str(reason_value).strip()
+        if reason_value is not None
+        else ""
+    )
+
+    if not reason:
+        reason = (
+            "Final sliced geometry still contains regions "
+            "that cannot be printed through a continuous "
+            "layer-by-layer material path."
+        )
+
+    requested_changes: list[str] = []
+    seen: set[str] = set()
+
+    for item in _GEOMETRY_REGENERATION_GUIDANCE:
+        cleaned = str(item).strip()
+        key = cleaned.casefold()
+
+        if (
+            cleaned
+            and key not in seen
+        ):
+            seen.add(key)
+            requested_changes.append(
+                cleaned
+            )
+
+    dangerous_layers = (
+        source_feedback.get(
+            "dangerous_layers"
+        )
+    )
+
+    if not isinstance(
+        dangerous_layers,
+        list,
+    ):
+        dangerous_layers = (
+            printability.get(
+                "dangerous_layers"
+            )
+        )
+
+    if not isinstance(
+        dangerous_layers,
+        list,
+    ):
+        dangerous_layers = []
+
+    observations: dict[str, Any] = {
+        "dangerous_layer_count":
+            len(dangerous_layers),
+    }
+
+    for field in (
+        "unsupported_layer_island_count",
+        "unanchored_support_component_count",
+        "total_bad_area_mm2",
+        "worst_bad_area_mm2",
+        "longest_bad_bridge_mm",
+    ):
+        value = printability.get(
+            field
+        )
+
+        if value is not None:
+            observations[field] = (
+                _json_ready(value)
+            )
+
+    return {
+        "status":
+            "needs_geometry_regeneration",
+
+        "reason":
+            reason,
+
+        "requested_geometry_changes":
+            requested_changes,
+
+        "observations":
+            observations,
+    }
+
+
 def _extract_clarification(m1_result: Mapping[str, Any]) -> str | None:
     payload = m1_result.get("payload")
     if not isinstance(payload, Mapping):
@@ -880,14 +1060,23 @@ def _workflow_result(state: _JobState) -> AutomationResult:
         value = record.get("result", {}) if isinstance(record, dict) else {}
         return value if isinstance(value, dict) else {}
 
-    m2_plan = result("m2_plan")
-    stl = result("m2_stl_handoff")
+    m2_plan = (
+        result("m2_regeneration_plan")
+        or result("m2_plan")
+    )
+    stl = (
+        result("m2_regeneration_stl_handoff")
+        or result("m2_stl_handoff")
+    )
     sliced = (
-        result("bambu_support_reslice")
+        result("bambu_regeneration_support_reslice")
+        or result("bambu_regeneration_slice")
+        or result("bambu_support_reslice")
         or result("bambu_slice")
     )
     started = result("print_start")
     artifact = sliced.get("artifact")
+    final_geometry = sliced.get("geometry_path") or stl.get("stl_file") or stl.get("m3_model_file")
     return AutomationResult(
         job_id=state.job_id,
         status=str(state.data.get("status")),
@@ -900,8 +1089,8 @@ def _workflow_result(state: _JobState) -> AutomationResult:
             else None
         ),
         stl_path=(
-            str(stl.get("stl_file") or stl.get("m3_model_file"))
-            if (stl.get("stl_file") or stl.get("m3_model_file"))
+            str(final_geometry)
+            if final_geometry
             else None
         ),
         gcode_path=(
@@ -963,6 +1152,31 @@ def run_text_to_print(
         resume=resume,
         event_sink=event_sink,
     )
+    from am_print_automation.preparation_recovery import can_recover_preparation, PREPARATION_STAGES
+    from am_print_executor.preparation_version import PREPARATION_REVISION
+    if resume and can_recover_preparation(state.data):
+        if active_config.start_print:
+            raise AutomationWorkflowError("Obsolete preparation must be rechecked without printer dispatch first.")
+        import uuid
+        attempt = "recheck_" + uuid.uuid4().hex[:12]
+        archive = state.job_directory / "attempt_history" / attempt / "workflow_state.json"
+        _atomic_write_json(archive, state.data)
+        for name in (*PREPARATION_STAGES, "printer_upload", "print_start"):
+            state.data["stages"].pop(name, None)
+        for name in ("manufacturability_feedback", "geometry_regeneration_result", "printability_resolution"):
+            state.data.pop(name, None)
+        state.data.update(status="created", current_stage=None, last_error=None,
+                          preparation_revision=PREPARATION_REVISION, preparation_attempt=attempt,
+                          preparation_started_unix=time.time())
+        state.save()
+        state.emit("preparation_revision_recovery", None, {
+            "revision": PREPARATION_REVISION, "prior_state": str(archive),
+            "generation_results_preserved": True, "printer_dispatch_allowed": False,
+        })
+    attempt = state.data.get("preparation_attempt", "")
+    if not isinstance(attempt, str) or (attempt and not re.fullmatch(r"recheck_[0-9a-f]{12}", attempt)):
+        raise AutomationWorkflowError("Invalid preparation attempt directory.")
+    manufacturing_directory = state.job_directory / "manufacturing" / attempt
     active_services = services or ProductionServices(
         active_config,
         m1_provider_object=m1_provider_object,
@@ -1027,39 +1241,99 @@ def run_text_to_print(
     task_dir = Path(str(plan["output_directory"]))
     stage("m2_submit", lambda: active_services.submit_m2(task_dir))
 
-    def wait_for_provider() -> dict[str, Any]:
-        deadline = time.monotonic() + active_config.provider_timeout_seconds
+    def wait_for_provider(
+        task_directory: Path,
+        stage_name: str,
+    ) -> dict[str, Any]:
+        deadline = (
+            time.monotonic()
+            + active_config.provider_timeout_seconds
+        )
         polls = 0
+
         while True:
             checkpoint()
-            current = active_services.poll_m2(task_dir)
+
+            current = (
+                active_services.poll_m2(
+                    task_directory
+                )
+            )
+
             polls += 1
-            provider_status = str(current.get("provider_status", "")).lower()
+
+            provider_status = str(
+                current.get(
+                    "provider_status",
+                    "",
+                )
+            ).lower()
+
             state.emit(
                 "provider_status",
-                "m2_wait",
-                {"poll": polls, "provider_status": provider_status},
+                stage_name,
+                {
+                    "poll":
+                        polls,
+
+                    "provider_status":
+                        provider_status,
+                },
             )
+
             if provider_status == "completed":
-                result = dict(current)
+                result = dict(
+                    current
+                )
                 result["poll_count"] = polls
                 return result
-            if provider_status in {"failed", "cancelled", "canceled"}:
+
+            if provider_status in {
+                "failed",
+                "cancelled",
+                "canceled",
+            }:
                 raise AutomationWorkflowError(
-                    f"M2 provider ended in {provider_status}"
+                    "M2 provider ended in "
+                    + provider_status
                 )
-            if time.monotonic() >= deadline:
+
+            if (
+                time.monotonic()
+                >= deadline
+            ):
                 raise TimeoutError(
-                    "Timed out waiting for the M2 generation provider"
+                    "Timed out waiting for "
+                    "the M2 generation provider"
                 )
-            remaining = active_config.provider_poll_interval_seconds
+
+            remaining = (
+                active_config
+                .provider_poll_interval_seconds
+            )
+
             while remaining > 0:
                 checkpoint()
-                interval = min(0.25, remaining)
-                sleep(interval)
+
+                interval = min(
+                    0.25,
+                    remaining,
+                )
+
+                sleep(
+                    interval
+                )
+
                 remaining -= interval
 
-    stage("m2_wait", wait_for_provider)
+    stage(
+        "m2_wait",
+        lambda: wait_for_provider(
+            task_dir,
+            "m2_wait",
+        ),
+    )
+
     stage("m2_artifact", lambda: active_services.acquire_m2(task_dir))
     raw_validation = stage(
         "m2_raw_validation",
@@ -1110,11 +1384,13 @@ def run_text_to_print(
     if not stl_path.is_absolute():
         stl_path = task_dir / stl_path
 
-    gcode_path = state.job_directory / "manufacturing" / f"{job_id}.gcode.3mf"
+    gcode_path = manufacturing_directory / f"{job_id}.gcode.3mf"
     sliced = stage(
         "bambu_slice",
         lambda: active_services.slice_stl(stl_path, gcode_path),
     )
+    if sliced.get("geometry_path"):
+        stl_path = Path(str(sliced["geometry_path"]))
     artifact = sliced.get("artifact")
     actual_gcode = (
         Path(str(artifact["path"]))
@@ -1123,15 +1399,14 @@ def run_text_to_print(
     )
     printability = stage(
         "m3_printability",
-        lambda: active_services.validate_gcode(actual_gcode, stl_path),
+        lambda: _validate_prepared_slice(active_services, sliced, actual_gcode, stl_path),
     )
     if printability.get("status") == "pass":
         state.skip_stage("bambu_support_reslice", "initial_slice_passed")
         state.skip_stage("m3_support_printability", "initial_slice_passed")
     else:
         supported_gcode_path = (
-            state.job_directory
-            / "manufacturing"
+            manufacturing_directory
             / f"{job_id}.supported.gcode.3mf"
         )
         supported_slice = stage(
@@ -1142,6 +1417,8 @@ def run_text_to_print(
             ),
         )
         supported_artifact = supported_slice.get("artifact")
+        if supported_slice.get("geometry_path"):
+            stl_path = Path(str(supported_slice["geometry_path"]))
         actual_gcode = (
             Path(str(supported_artifact["path"]))
             if (
@@ -1152,29 +1429,463 @@ def run_text_to_print(
         )
         supported_printability = stage(
             "m3_support_printability",
-            lambda: active_services.validate_gcode(actual_gcode, stl_path),
+            lambda: _validate_prepared_slice(active_services, supported_slice, actual_gcode, stl_path),
         )
         if supported_printability.get("status") != "pass":
-            # A conclusive physical-printability BLOCK is a manufacturing
-            # decision, not an execution failure. Preserve the completed Gate
-            # result and stop before any credential, upload, or print action.
-            state.data["manufacturability_feedback"] = _json_ready(
-                supported_printability.get("feedback_to_m2") or {}
+            regeneration_feedback = (
+                _geometry_regeneration_feedback(
+                    supported_printability
+                )
             )
-            state.data["printability_resolution"] = str(
-                supported_printability.get("resolution")
-                or "needs_geometry_regeneration"
+
+            state.data[
+                "manufacturability_feedback"
+            ] = _json_ready(
+                regeneration_feedback
             )
-            state.skip_stage(
-                "printer_upload",
-                "physical_printability_blocked",
+
+            state.data[
+                "printability_resolution"
+            ] = "needs_geometry_regeneration"
+
+            state.data[
+                "geometry_regeneration_attempts"
+            ] = 1
+
+            state.save()
+
+            if (
+                MAX_GEOMETRY_REGENERATION_ATTEMPTS
+                != 1
+            ):
+                raise AutomationWorkflowError(
+                    "Geometry regeneration policy "
+                    "must remain exactly one attempt."
+                )
+
+            regeneration_plan = stage(
+                "m2_regeneration_plan",
+                lambda: active_services.plan_m2(
+                    manifest_path,
+                    (
+                        state.job_directory
+                        / "m2_regeneration_1"
+                    ),
+                ),
             )
-            state.skip_stage(
-                "print_start",
-                "physical_printability_blocked",
+
+            regeneration_task_dir = Path(
+                str(
+                    regeneration_plan[
+                        "output_directory"
+                    ]
+                )
             )
-            state.finish("needs_geometry_regeneration")
-            return _workflow_result(state)
+
+            feedback_path = (
+                regeneration_task_dir
+                / "manufacturability_feedback.json"
+            )
+
+            def write_regeneration_feedback(
+            ) -> dict[str, Any]:
+                _atomic_write_json(
+                    feedback_path,
+                    regeneration_feedback,
+                )
+
+                return {
+                    "status":
+                        "feedback_ready",
+
+                    "feedback_file":
+                        str(feedback_path),
+
+                    "attempt":
+                        1,
+                }
+
+            stage(
+                "m2_regeneration_feedback",
+                write_regeneration_feedback,
+            )
+
+            stage(
+                "m2_regeneration_submit",
+                lambda: active_services.submit_m2(
+                    regeneration_task_dir
+                ),
+            )
+
+            stage(
+                "m2_regeneration_wait",
+                lambda: wait_for_provider(
+                    regeneration_task_dir,
+                    "m2_regeneration_wait",
+                ),
+            )
+
+            stage(
+                "m2_regeneration_artifact",
+                lambda: active_services.acquire_m2(
+                    regeneration_task_dir
+                ),
+            )
+
+            regeneration_raw_validation = (
+                stage(
+                    "m2_regeneration_raw_validation",
+                    lambda:
+                        active_services.validate_m2(
+                            regeneration_task_dir
+                        ),
+                )
+            )
+
+            if (
+                regeneration_raw_validation.get(
+                    "hard_constraints_passed"
+                )
+                is True
+            ):
+                state.skip_stage(
+                    "m2_regeneration_mesh_repair",
+                    "raw_mesh_passed",
+                )
+
+                state.skip_stage(
+                    "m2_regeneration_repaired_validation",
+                    "raw_mesh_passed",
+                )
+
+            else:
+                stage(
+                    "m2_regeneration_mesh_repair",
+                    lambda:
+                        active_services.repair_m2(
+                            regeneration_task_dir
+                        ),
+                )
+
+                regeneration_repaired_validation = (
+                    stage(
+                        "m2_regeneration_repaired_validation",
+                        lambda:
+                            active_services.validate_m2(
+                                regeneration_task_dir
+                            ),
+                    )
+                )
+
+                if (
+                    regeneration_repaired_validation.get(
+                        "hard_constraints_passed"
+                    )
+                    is not True
+                ):
+                    error = AutomationWorkflowError(
+                        "The regenerated repaired "
+                        "model still fails M2 "
+                        "hard constraints."
+                    )
+
+                    state.fail_stage(
+                        "m2_regeneration_repaired_validation",
+                        error,
+                    )
+
+                    raise AutomationWorkflowError(
+                        str(error),
+                        job_id=job_id,
+                        state_file=state.state_file,
+                        stage=(
+                            "m2_regeneration_"
+                            "repaired_validation"
+                        ),
+                    )
+
+            stage(
+                "m2_regeneration_normalize",
+                lambda:
+                    active_services.normalize_m2(
+                        regeneration_task_dir
+                    ),
+            )
+
+            regeneration_normalized = stage(
+                "m2_regeneration_normalized_validation",
+                lambda:
+                    active_services
+                    .validate_normalized_m2(
+                        regeneration_task_dir
+                    ),
+            )
+
+            if (
+                regeneration_normalized.get(
+                    "hard_constraints_passed"
+                )
+                is not True
+            ):
+                error = AutomationWorkflowError(
+                    "The regenerated normalized "
+                    "model fails M2 hard constraints."
+                )
+
+                state.fail_stage(
+                    "m2_regeneration_normalized_validation",
+                    error,
+                )
+
+                raise AutomationWorkflowError(
+                    str(error),
+                    job_id=job_id,
+                    state_file=state.state_file,
+                    stage=(
+                        "m2_regeneration_"
+                        "normalized_validation"
+                    ),
+                )
+
+            regeneration_stl = stage(
+                "m2_regeneration_stl_handoff",
+                lambda:
+                    active_services.create_stl(
+                        regeneration_task_dir
+                    ),
+            )
+
+            regeneration_stl_value = (
+                regeneration_stl.get(
+                    "stl_file"
+                )
+                or
+                regeneration_stl.get(
+                    "m3_model_file"
+                )
+            )
+
+            regeneration_stl_path = Path(
+                str(
+                    regeneration_stl_value
+                )
+            )
+
+            if not (
+                regeneration_stl_path
+                .is_absolute()
+            ):
+                regeneration_stl_path = (
+                    regeneration_task_dir
+                    / regeneration_stl_path
+                )
+
+            regeneration_gcode_path = (
+                manufacturing_directory
+                / (
+                    f"{job_id}."
+                    "regenerated.gcode.3mf"
+                )
+            )
+
+            regeneration_slice = stage(
+                "bambu_regeneration_slice",
+                lambda:
+                    active_services.slice_stl(
+                        regeneration_stl_path,
+                        regeneration_gcode_path,
+                    ),
+            )
+
+            regeneration_artifact = (
+                regeneration_slice.get(
+                    "artifact"
+                )
+            )
+
+            if regeneration_slice.get("geometry_path"):
+                regeneration_stl_path = Path(str(regeneration_slice["geometry_path"]))
+
+            actual_gcode = (
+                Path(
+                    str(
+                        regeneration_artifact[
+                            "path"
+                        ]
+                    )
+                )
+                if (
+                    isinstance(
+                        regeneration_artifact,
+                        Mapping,
+                    )
+                    and
+                    regeneration_artifact.get(
+                        "path"
+                    )
+                )
+                else regeneration_gcode_path
+            )
+
+            regeneration_printability = (
+                stage(
+                    "m3_regeneration_printability",
+                    lambda:
+                        _validate_prepared_slice(active_services, regeneration_slice,
+                            actual_gcode,
+                            regeneration_stl_path,
+                        ),
+                )
+            )
+
+            if (
+                regeneration_printability.get(
+                    "status"
+                )
+                == "pass"
+            ):
+                state.skip_stage(
+                    "bambu_regeneration_support_reslice",
+                    "regenerated_initial_slice_passed",
+                )
+
+                state.skip_stage(
+                    "m3_regeneration_support_printability",
+                    "regenerated_initial_slice_passed",
+                )
+
+            else:
+                regeneration_supported_gcode = (
+                    manufacturing_directory
+                    / (
+                        f"{job_id}."
+                        "regenerated.supported."
+                        "gcode.3mf"
+                    )
+                )
+
+                regeneration_supported_slice = (
+                    stage(
+                        "bambu_regeneration_support_reslice",
+                        lambda:
+                            active_services
+                            .slice_stl_with_support(
+                                regeneration_stl_path,
+                                regeneration_supported_gcode,
+                            ),
+                    )
+                )
+
+                regeneration_supported_artifact = (
+                    regeneration_supported_slice.get(
+                        "artifact"
+                    )
+                )
+
+                if regeneration_supported_slice.get("geometry_path"):
+                    regeneration_stl_path = Path(str(regeneration_supported_slice["geometry_path"]))
+
+                actual_gcode = (
+                    Path(
+                        str(
+                            regeneration_supported_artifact[
+                                "path"
+                            ]
+                        )
+                    )
+                    if (
+                        isinstance(
+                            regeneration_supported_artifact,
+                            Mapping,
+                        )
+                        and
+                        regeneration_supported_artifact.get(
+                            "path"
+                        )
+                    )
+                    else regeneration_supported_gcode
+                )
+
+                regeneration_supported_printability = (
+                    stage(
+                        "m3_regeneration_support_printability",
+                        lambda:
+                            _validate_prepared_slice(active_services, regeneration_supported_slice,
+                                actual_gcode,
+                                regeneration_stl_path,
+                            ),
+                    )
+                )
+
+                if (
+                    regeneration_supported_printability.get(
+                        "status"
+                    )
+                    != "pass"
+                ):
+                    state.data[
+                        "geometry_regeneration_result"
+                    ] = "blocked"
+
+                    state.data[
+                        "manufacturability_feedback_after_regeneration"
+                    ] = _json_ready(
+                        regeneration_supported_printability.get(
+                            "feedback_to_m2"
+                        )
+                        or {}
+                    )
+
+                    state.data[
+                        "printability_resolution"
+                    ] = str(
+                        regeneration_supported_printability.get(
+                            "resolution"
+                        )
+                        or
+                        "needs_geometry_regeneration"
+                    )
+
+                    state.skip_stage(
+                        "printer_upload",
+                        (
+                            "physical_printability_"
+                            "blocked_after_regeneration"
+                        ),
+                    )
+
+                    state.skip_stage(
+                        "print_start",
+                        (
+                            "physical_printability_"
+                            "blocked_after_regeneration"
+                        ),
+                    )
+
+                    state.finish(
+                        "needs_geometry_regeneration"
+                    )
+
+                    return _workflow_result(
+                        state
+                    )
+
+            stl_path = (
+                regeneration_stl_path
+            )
+
+            state.data[
+                "geometry_regeneration_result"
+            ] = "pass"
+
+            state.data[
+                "printability_resolution"
+            ] = (
+                "physical_printability_verified_"
+                "after_regeneration"
+            )
+
+            state.save()
 
     if not active_config.start_print:
         state.skip_stage("printer_upload", "prepare_only")

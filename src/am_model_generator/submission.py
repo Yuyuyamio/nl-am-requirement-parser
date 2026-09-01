@@ -528,6 +528,29 @@ def submit_m2_plan(
     )
 
     if request_exists != submission_exists:
+        # Only providers with an explicit local-only recovery capability may
+        # finish cached postprocessing. Never resubmit an unknown remote job.
+        if request_exists and not submission_exists:
+            recovery_registry = registry if registry is not None else build_default_provider_registry()
+            recover = getattr(recovery_registry.get(normalized_provider), "recover_local_submission", None)
+            if callable(recover):
+                existing_request = _read_json_object(provider_request_path, label="Existing Provider Request")
+                ensure_valid_provider_request(existing_request)
+                if existing_request != provider_request_data:
+                    raise M2ProviderError("M2_PROVIDER_REQUEST_CONFLICT", "已有Provider Request与当前请求不一致")
+                recovered = recover(provider_request)
+                if recovered is not None:
+                    recovered_data = recovered.to_dict()
+                    ensure_valid_provider_submission(recovered_data)
+                    if (recovered.request_id != provider_request.request_id
+                            or recovered.provider != normalized_provider
+                            or recovered.idempotency_key != provider_request.idempotency_key
+                            or recovered.status != "completed"):
+                        raise M2ProviderError("M2_PROVIDER_RESPONSE_MISMATCH", "本地恢复结果与原请求不一致")
+                    _write_json_atomic(provider_submission_path, recovered_data)
+                    _write_json_atomic(manifest_path, _updated_manifest(manifest, provider_name=normalized_provider))
+                    return _result_data(task_directory=task_path, submission=recovered_data,
+                                        reused_existing_submission=True)
         raise M2ProviderError(
             "M2_SUBMISSION_STATE_INCOMPLETE",
             "Provider提交状态不完整，为避免重复提交已停止",

@@ -12,7 +12,7 @@ const STAGES = [
   { id: "m2_normalize", title: "标准化模型", detail: "统一坐标、比例和模型格式" },
   { id: "m2_normalized_validation", title: "验证标准模型", detail: "执行最终模型硬约束检查" },
   { id: "m2_stl_handoff", title: "生成 STL", detail: "准备切片所需的标准模型" },
-  { id: "bambu_slice", title: "自动摆放与切片", detail: "无界面调用 Bambu Studio 自动朝向" },
+  { id: "bambu_slice", title: "平底、可拆支撑与摆正", detail: "检查平底和支撑，再运行 Auto Orient 并重新切片复检" },
   { id: "m3_printability", title: "检查打印安全", detail: "检查悬垂、桥接与支撑连续性" },
   { id: "bambu_support_reslice", title: "添加支撑并重切", detail: "必要时自动使用保守支撑方案" },
   { id: "m3_support_printability", title: "复检支撑切片", detail: "确认最终刀路通过安全门" },
@@ -25,7 +25,7 @@ const GROUPS = [
   { title: "生成 3D 模型", detail: "规划并生成模型文件", stages: ["m2_plan", "m2_submit", "m2_wait", "m2_artifact"] },
   { title: "修复并验证模型", detail: "检查网格、修复并标准化", stages: ["m2_raw_validation", "m2_mesh_repair", "m2_repaired_validation", "m2_normalize", "m2_normalized_validation"] },
   { title: "准备 STL", detail: "创建稳定的切片输入", stages: ["m2_stl_handoff"] },
-  { title: "自动摆放与切片", detail: "无界面完成朝向和刀路生成", stages: ["bambu_slice"] },
+  { title: "平底、可拆支撑与摆正", detail: "修复底部、生成支撑、摆正后重新切片复检", stages: ["bambu_slice"] },
   { title: "检查打印安全", detail: "检查刀路，必要时自动添加支撑", stages: ["m3_printability", "bambu_support_reslice", "m3_support_printability"] },
   { title: "上传并开始打印", detail: "校验设备状态后发送打印任务", stages: ["printer_upload", "print_start"] },
 ];
@@ -43,6 +43,7 @@ const STATUS_TEXT = {
   manual_reconciliation_required: "需要人工核对",
   print_rejected: "打印机拒绝任务",
   failed: "运行失败",
+  needs_geometry_regeneration: "模型未通过检查",
 };
 
 const EVENT_TEXT = {
@@ -51,6 +52,7 @@ const EVENT_TEXT = {
   stage_completed: "步骤完成",
   stage_skipped: "无需执行，已跳过",
   stage_reused: "复用已完成结果",
+  preparation_revision_recovery: "复用原模型，应用新版修复",
   provider_status: "模型服务状态更新",
   stage_failed: "步骤执行失败",
   stage_outcome_unknown: "执行结果需要人工核对",
@@ -83,6 +85,12 @@ const elements = {
   printerConnectResult: $("#printerConnectResult"), submitPrinterConnect: $("#submitPrinterConnect"),
   printerSuccessDialog: $("#printerSuccessDialog"), printerSuccessIp: $("#printerSuccessIp"),
   printerSuccessDevice: $("#printerSuccessDevice"), printerSuccessTransport: $("#printerSuccessTransport"),
+  deleteDialog: $("#deleteDialog"), deleteDialogText: $("#deleteDialogText"),
+  cancelDelete: $("#cancelDelete"), confirmDelete: $("#confirmDelete"),
+  deliveryCard: $("#deliveryCard"), deliveryMessage: $("#deliveryMessage"), deliveryLinks: $("#deliveryLinks"),
+  modelPreview: $("#modelPreview"), previewHint: $("#previewHint"), printButton: $("#printButton"),
+  previewControls: $("#previewControls"), previewLegend: $("#previewLegend"),
+  supportVisibility: $("#supportVisibility"),
 };
 
 let selectedJobId = null;
@@ -97,6 +105,7 @@ let recordingTimer = null;
 let voiceState = "idle";
 let speechAvailable = false;
 let browserRecordingAvailable = false;
+let pendingDeleteConversation = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -123,6 +132,19 @@ const PRINTER_ERROR_TEXT = {
   timeout: "连接超时，或没有收到真实打印机状态。",
 };
 
+function printerFailureText(snapshot = {}) {
+  if (snapshot.error_code === "timeout") {
+    if (!snapshot.authenticated) {
+      const target = snapshot.printer_ip ? `${snapshot.printer_ip}:8883` : "打印机的 8883 端口";
+      return `无法连接 ${target}。请在打印机网络页面核对当前 IP，并确认打印机已开机、Wi-Fi 在线且与电脑处于同一局域网。`;
+    }
+    if (!snapshot.printer_state_observed) {
+      return "MQTT 已认证，但没有收到设备状态。请核对 Device ID，并确认打印机已启用局域网访问。";
+    }
+  }
+  return PRINTER_ERROR_TEXT[snapshot.error_code] || snapshot.error || "连接失败";
+}
+
 function setPrinterStatus(snapshot = {}) {
   const connected = Boolean(snapshot.connected && snapshot.authenticated && snapshot.printer_state_observed);
   const failed = Boolean(snapshot.error_code);
@@ -134,7 +156,7 @@ function setPrinterStatus(snapshot = {}) {
     elements.printerCaption.textContent = `${snapshot.printer_ip} · ${snapshot.device_id || "已自动发现"}`;
     elements.printerConnectButton.textContent = "重新验证连接";
   } else if (failed) {
-    elements.printerCaption.textContent = PRINTER_ERROR_TEXT[snapshot.error_code] || snapshot.error || "连接失败";
+    elements.printerCaption.textContent = printerFailureText(snapshot);
     elements.printerConnectButton.textContent = "重新连接";
   } else {
     elements.printerCaption.textContent = "请先验证本地 X1C 连接";
@@ -187,7 +209,7 @@ async function connectPrinter(event) {
     const failure = error.payload || { error: error.message };
     setPrinterStatus(failure);
     elements.printerConnectResult.className = "printer-connect-result error";
-    const reason = PRINTER_ERROR_TEXT[failure.error_code] || failure.error || error.message;
+    const reason = printerFailureText(failure) || error.message;
     elements.printerConnectResult.textContent = failure.error_code ? `${failure.error_code} · ${reason}` : reason;
   } finally {
     accessCode = "";
@@ -203,7 +225,9 @@ function titleFromRequest(text) {
 }
 
 function stageMeta(id) {
-  return STAGES.find((stage) => stage.id === id) || { title: id || "准备流程", detail: "正在准备下一步" };
+  const original = STAGES.find((stage) => stage.id === String(id).replace("_regeneration_", "_"));
+  if (original && String(id).includes("_regeneration_")) return { title: `重新${original.title}`, detail: "首轮未通过，执行一次重新生成与完整复检" };
+  return original || { title: id || "准备流程", detail: "正在准备下一步" };
 }
 
 function stageRecord(snapshot, id) {
@@ -229,14 +253,78 @@ function calculateProgress(snapshot) {
   let score = 0;
   for (const stage of STAGES) {
     if (isFinishedRecord(records[stage.id])) score += 1;
-    else if (stage.id === snapshot.current_stage && records[stage.id]?.status === "running") score += 0.35;
+    else if (stage.id === snapshot.current_stage && records[stage.id]?.status === "running") {
+      const started = Number(records[stage.id].started_unix || snapshot.updated_unix || Date.now() / 1000);
+      const elapsed = Math.max(0, Date.now() / 1000 - started);
+      const timeScale = ({
+        m1: 24, m2_plan: 24, m2_submit: 45, m2_wait: 420, m2_artifact: 30,
+        m2_raw_validation: 35, m2_mesh_repair: 75, m2_repaired_validation: 35,
+        m2_normalize: 35, m2_normalized_validation: 35, m2_stl_handoff: 24,
+        bambu_slice: 180, m3_printability: 70, bambu_support_reslice: 180,
+        m3_support_printability: 70, printer_upload: 35, print_start: 24,
+      })[stage.id] || 60;
+      const activeFraction = .16 + .72 * (1 - Math.exp(-elapsed / timeScale));
+      score += Math.min(.88, activeFraction);
+    }
   }
   if (["ready_to_print", "print_started"].includes(snapshot.status)) return 100;
-  return Math.min(99, Math.round((score / STAGES.length) * 100));
+  return Math.min(99, (score / STAGES.length) * 100);
 }
 
-function nearestFive(value) {
-  return Math.max(0, Math.min(100, Math.round(value / 5) * 5));
+const progressMotion = {
+  jobId: null,
+  displayed: 0,
+  target: 0,
+  frame: null,
+  lastTime: 0,
+  active: false,
+};
+
+function paintProgress(value) {
+  const safe = Math.max(0, Math.min(100, value));
+  elements.progressBar.style.width = `${safe.toFixed(3)}%`;
+  const label = safe >= 99.999 ? "100" : progressMotion.active ? safe.toFixed(1) : String(Math.floor(safe));
+  elements.progressValue.textContent = `${label}%`;
+  elements.progressBar.parentElement.setAttribute("role", "progressbar");
+  elements.progressBar.parentElement.setAttribute("aria-valuemin", "0");
+  elements.progressBar.parentElement.setAttribute("aria-valuemax", "100");
+  elements.progressBar.parentElement.setAttribute("aria-valuenow", String(label));
+}
+
+function animateProgress(time) {
+  const motion = progressMotion;
+  const elapsed = motion.lastTime ? Math.min(80, time - motion.lastTime) : 16;
+  motion.lastTime = time;
+  const distance = motion.target - motion.displayed;
+  if (Math.abs(distance) <= .008) {
+    motion.displayed = motion.target;
+    motion.frame = null;
+    motion.lastTime = 0;
+    paintProgress(motion.displayed);
+    return;
+  }
+  motion.displayed += distance * (1 - Math.exp(-elapsed / 520));
+  paintProgress(motion.displayed);
+  motion.frame = requestAnimationFrame(animateProgress);
+}
+
+function setProgressTarget(jobId, value, active) {
+  const motion = progressMotion;
+  const target = Math.max(0, Math.min(100, Number(value) || 0));
+  motion.active = Boolean(active);
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  if (motion.jobId !== jobId || reducedMotion) {
+    if (motion.frame) cancelAnimationFrame(motion.frame);
+    motion.jobId = jobId;
+    motion.target = target;
+    motion.displayed = target;
+    motion.frame = null;
+    motion.lastTime = 0;
+    paintProgress(target);
+    return;
+  }
+  motion.target = Math.max(motion.target, target);
+  if (!motion.frame) motion.frame = requestAnimationFrame(animateProgress);
 }
 
 function statusPresentation(snapshot) {
@@ -245,7 +333,12 @@ function statusPresentation(snapshot) {
   if (control.status === "stop_requested") return ["正在安全停止", "当前不可中断的调用结束后，不会再进入下一步。"];
   if (snapshot.status === "paused" || control.status === "pause_requested") return ["任务已暂停", `停在「${current.title}」附近，已完成的结果会保留。`];
   if (control.status === "dispatching") return ["正在启动打印", "启动指令正在发送，这个短暂区间不能暂停或停止。"];
-  if (snapshot.status === "ready_to_print") return ["切片已经准备好", "模型已通过所有安全检查，打印文件可以随时发送。"];
+  if (snapshot.status === "ready_to_print") return snapshot.delivery?.available
+    ? ["成品文件已就绪", "最终模型已通过软件检查。请先查看模型和切片支撑，再决定是否打印。"]
+    : ["成品文件需要重新核验", snapshot.delivery?.message || "无法确认最终文件，请重新生成。"];
+  if (snapshot.status === "needs_geometry_regeneration") return snapshot.preparation_recovery_available
+    ? ["有可用的流程修复", "可以从现有模型重新修复和检查，不必重新生成，也不会自动开打。"]
+    : ["模型未通过检查，已停止", "本轮修复未能通过最终检查，没有上传或开打。模型和详细检查记录已保留。"];
   if (snapshot.status === "print_started") return ["打印任务已发送", "打印机已经接收任务，请留意首层打印状态。"];
   if (snapshot.status === "stopped") return ["任务已完全停止", "没有继续执行后续软件步骤；已完成的安全结果仍然保留。"];
   if (snapshot.status === "awaiting_clarification") return ["还需要一点信息", "补充完整需求后，可以重新开始自动制作。"];
@@ -257,7 +350,10 @@ function statusPresentation(snapshot) {
 
 function renderTimeline(snapshot) {
   const fragment = document.createDocumentFragment();
-  GROUPS.forEach((group) => {
+  const groups = [...GROUPS];
+  const regenerated = Object.keys(snapshot.stages || {}).filter((id) => id.includes("_regeneration_"));
+  if (regenerated.length) groups.splice(groups.length - 1, 0, { title: "重新生成并复检", detail: "首轮未通过，最多重新生成一次", stages: regenerated });
+  groups.forEach((group) => {
     const state = groupState(group, snapshot);
     const item = document.createElement("li");
     if (state !== "pending") item.classList.add(state);
@@ -274,7 +370,8 @@ function renderTimeline(snapshot) {
     }
     copy.append(title, detail);
     const time = document.createElement("time");
-    time.textContent = { done: "完成", active: "进行中", paused: "已暂停", failed: "出错", pending: "等待" }[state];
+    const skipped = group.stages.every((id) => stageRecord(snapshot, id)?.status === "skipped");
+    time.textContent = skipped ? "未执行" : { done: "完成", active: "进行中", paused: "已暂停", failed: "出错", pending: "等待" }[state];
     item.append(marker, copy, time);
     fragment.append(item);
   });
@@ -312,12 +409,13 @@ function renderControls(snapshot) {
   elements.pauseButton.disabled = !(control.can_pause || canResume);
   elements.pauseButton.innerHTML = canResume ? "▶&nbsp;&nbsp;继续" : "Ⅱ&nbsp;&nbsp;暂停";
   elements.stopButton.disabled = !control.can_stop;
-  const canRetry = snapshot.terminal && !["print_started", "manual_reconciliation_required"].includes(snapshot.status);
+  const canRetry = snapshot.terminal && (snapshot.preparation_recovery_available || !["ready_to_print", "print_started", "manual_reconciliation_required", "needs_geometry_regeneration", "awaiting_clarification"].includes(snapshot.status));
   elements.retryButton.classList.toggle("hidden", !canRetry);
   if (control.status === "dispatching") elements.controlHint.textContent = "打印启动指令正在发送，不能安全撤回";
   else if (control.status === "stop_requested") elements.controlHint.textContent = "停止请求已收到，正在等待安全检查点";
   else if (canResume || snapshot.status === "paused") elements.controlHint.textContent = "任务暂停期间不会进入新的制造步骤";
   else if (snapshot.status === "print_started") elements.controlHint.textContent = "后续急停请使用打印机实体按钮或官方设备控制";
+  else if (snapshot.status === "ready_to_print") elements.controlHint.textContent = "尚未开打；请先查看上方成品文件";
   else elements.controlHint.textContent = "暂停会在当前安全步骤结束后生效";
 }
 
@@ -338,19 +436,20 @@ function renderSnapshot(snapshot) {
   elements.taskTitle.textContent = titleFromRequest(snapshot.request_text);
   elements.requestText.textContent = snapshot.request_text;
   elements.detailsButton.disabled = false;
-  elements.autoPrintToggle.checked = Boolean(snapshot.start_print_requested);
   elements.autoPrintToggle.disabled = Boolean(snapshot.control?.worker_alive);
   const [title, summary] = statusPresentation(snapshot);
   elements.statusTitle.textContent = title;
   elements.stageSummary.textContent = summary;
   elements.statusDot.classList.toggle("hidden", Boolean(snapshot.terminal) || ["stopped", "failed"].includes(snapshot.status));
   const progress = calculateProgress(snapshot);
-  elements.progressValue.textContent = `${progress}%`;
-  elements.progressBar.className = progress ? `progress-${nearestFive(progress)}` : "";
+  const progressActive = Boolean(snapshot.control?.worker_alive) && !snapshot.terminal;
+  elements.progressBar.classList.toggle("is-running", progressActive);
+  setProgressTarget(snapshot.job_id, progress, progressActive);
   renderTimeline(snapshot);
   renderEvents(snapshot.events);
   renderControls(snapshot);
   renderError(snapshot);
+  renderDelivery(snapshot);
   const question = snapshot.clarification_question;
   elements.clarificationCard.classList.toggle("hidden", !question);
   if (question) elements.clarificationQuestion.textContent = question;
@@ -359,12 +458,13 @@ function renderSnapshot(snapshot) {
 
 function updateElapsed() {
   if (!currentSnapshot) return;
-  const start = Number(currentSnapshot.created_unix || Date.now() / 1000);
+  const start = Number(currentSnapshot.preparation_started_unix || currentSnapshot.created_unix || Date.now() / 1000);
   const end = currentSnapshot.terminal ? Number(currentSnapshot.updated_unix || Date.now() / 1000) : Date.now() / 1000;
   const seconds = Math.max(0, Math.round(end - start));
+  const timingLabel = currentSnapshot.preparation_started_unix ? "本次修复用时" : "已用时";
   if (seconds < 8) elements.elapsed.textContent = "刚刚开始";
-  else if (seconds < 60) elements.elapsed.textContent = `已用时 ${seconds}秒`;
-  else elements.elapsed.textContent = `已用时 ${Math.floor(seconds / 60)}分 ${seconds % 60}秒`;
+  else if (seconds < 60) elements.elapsed.textContent = `${timingLabel} ${seconds}秒`;
+  else elements.elapsed.textContent = `${timingLabel} ${Math.floor(seconds / 60)}分 ${seconds % 60}秒`;
 }
 
 function historyClass(job) {
@@ -383,10 +483,13 @@ function renderHistory(jobs) {
     fragment.append(empty);
   }
   jobs.forEach((job) => {
+    const row = document.createElement("div");
+    row.className = `history-item${job.job_id === selectedJobId ? " active" : ""}${job.pinned ? " pinned" : ""}`;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `history-item${job.job_id === selectedJobId ? " active" : ""}`;
+    button.className = "history-select";
     button.dataset.jobId = job.job_id;
+    button.setAttribute("aria-label", `打开对话：${titleFromRequest(job.request_text)}`);
     const dot = document.createElement("span");
     dot.className = `history-dot ${historyClass(job)}`.trim();
     const copy = document.createElement("span");
@@ -400,9 +503,71 @@ function renderHistory(jobs) {
     const age = Math.max(0, Date.now() / 1000 - Number(job.updated_unix || 0));
     time.textContent = age < 90 ? "刚刚" : age < 3600 ? `${Math.floor(age / 60)}分` : age < 86400 ? `${Math.floor(age / 3600)}时` : `${Math.floor(age / 86400)}天`;
     button.append(dot, copy, time);
-    fragment.append(button);
+    const actions = document.createElement("span");
+    actions.className = "history-actions";
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.dataset.historyAction = job.pinned ? "unpin" : "pin";
+    pin.dataset.jobId = job.job_id;
+    pin.className = job.pinned ? "pin active" : "pin";
+    pin.textContent = job.pinned ? "取消" : "置顶";
+    pin.setAttribute("aria-label", `${job.pinned ? "取消置顶" : "置顶"}对话：${titleFromRequest(job.request_text)}`);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.dataset.historyAction = "delete";
+    remove.dataset.jobId = job.job_id;
+    remove.dataset.jobTitle = titleFromRequest(job.request_text);
+    remove.className = "delete";
+    remove.textContent = "删除";
+    remove.setAttribute("aria-label", `删除对话：${titleFromRequest(job.request_text)}`);
+    actions.append(pin, remove);
+    row.append(button, actions);
+    fragment.append(row);
   });
   elements.history.replaceChildren(fragment);
+}
+
+async function updatePinned(jobId, action) {
+  try {
+    const snapshot = await api(`/api/jobs/${encodeURIComponent(jobId)}/${action}`, {
+      method: "POST",
+      body: "{}",
+    });
+    if (selectedJobId === jobId) currentSnapshot = snapshot;
+    await loadJobs(false);
+    showToast(action === "pin" ? "已置顶" : "已取消置顶", { compact: true, duration: 1500 });
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function deleteConversation(jobId, title) {
+  pendingDeleteConversation = { jobId, title };
+  elements.deleteDialogText.textContent = `「${title}」会从最近任务中移除，本地任务资料会转存到回收目录。运行中的任务不会被删除。`;
+  elements.confirmDelete.disabled = false;
+  elements.confirmDelete.textContent = "删除对话";
+  showDialog(elements.deleteDialog);
+  setTimeout(() => elements.cancelDelete.focus(), 0);
+}
+
+async function confirmDeleteConversation() {
+  if (!pendingDeleteConversation) return;
+  const { jobId } = pendingDeleteConversation;
+  elements.confirmDelete.disabled = true;
+  elements.confirmDelete.textContent = "正在删除…";
+  try {
+    await api(`/api/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+    elements.deleteDialog.close();
+    pendingDeleteConversation = null;
+    if (selectedJobId === jobId) resetComposer();
+    else await loadJobs(false);
+    showToast("对话已删除", { compact: true, duration: 1800 });
+  } catch (error) {
+    elements.deleteDialogText.textContent = error.message;
+  } finally {
+    elements.confirmDelete.disabled = false;
+    elements.confirmDelete.textContent = "删除对话";
+  }
 }
 
 async function loadJobs(selectLatest = false) {
@@ -454,6 +619,7 @@ async function createJob() {
   }
   elements.sendButton.disabled = true;
   try {
+    if (elements.autoPrintToggle.checked && !confirm("已选择自动打印：检查通过后会上传文件并启动实体打印机。请确认设备、材料与喷嘴匹配，平台已清空。是否开始？")) return;
     const snapshot = await api("/api/jobs", {
       method: "POST",
       body: JSON.stringify({ transcript, start_print: elements.autoPrintToggle.checked }),
@@ -491,9 +657,71 @@ function resetComposer() {
   elements.taskTitle.textContent = "新建打印";
   elements.detailsButton.disabled = true;
   elements.autoPrintToggle.disabled = false;
+  elements.autoPrintToggle.checked = false;
   elements.promptInput.focus();
   loadJobs(false);
 }
+
+let previewKey = null;
+let previewAbort = null;
+let previewController = null;
+function renderDelivery(snapshot) {
+  const delivery = snapshot.delivery || {};
+  elements.deliveryCard.classList.toggle("hidden", !snapshot.terminal);
+  elements.deliveryMessage.textContent = delivery.message || "等待最终检查完成。";
+  elements.deliveryLinks.replaceChildren();
+  elements.printButton.classList.toggle("hidden", !(delivery.available && snapshot.status === "ready_to_print"));
+  for (const file of delivery.available ? delivery.files : []) {
+    const link = document.createElement("a");
+    link.href = file.url;
+    link.download = file.name;
+    link.textContent = file.name;
+    elements.deliveryLinks.append(link);
+  }
+  const model = delivery.available && delivery.files.find((file) => file.kind === "stl");
+  const gcode = delivery.available && delivery.files.find((file) => file.kind === "gcode");
+  const key = model && gcode && delivery.preview_url ? `${snapshot.job_id}:${model.sha256}:${gcode.sha256}` : null;
+  if (previewKey === key) return;
+  previewKey = key;
+  previewAbort?.abort();
+  previewController?.dispose?.();
+  previewController = null;
+  elements.modelPreview.classList.add("hidden");
+  elements.previewControls.classList.add("hidden");
+  elements.previewLegend.classList.add("hidden");
+  elements.previewHint.textContent = "";
+  if (!model || !gcode || !delivery.preview_url) return;
+  previewAbort = new AbortController();
+  elements.previewHint.textContent = "正在读取最终模型和真实支撑刀路…";
+  Promise.all([
+    fetch(model.url, { signal: previewAbort.signal, cache: "no-store" }),
+    fetch(delivery.preview_url, { signal: previewAbort.signal, cache: "no-store" }),
+  ]).then(async ([modelResponse, supportResponse]) => {
+    if (!modelResponse.ok || modelResponse.headers.get("X-Artifact-SHA256") !== model.sha256) throw new Error("最终模型核验失败");
+    if (!supportResponse.ok) throw new Error("最终支撑核验失败");
+    const [data, support] = await Promise.all([modelResponse.arrayBuffer(), supportResponse.json()]);
+    if (support.schema !== "actual_support_toolpaths_v1"
+        || support.source?.stl_sha256 !== model.sha256
+        || support.source?.gcode_sha256 !== gcode.sha256
+        || support.segment_count !== support.paths?.length) throw new Error("模型与支撑来源不一致");
+    if (previewKey !== key) return;
+    elements.modelPreview.classList.remove("hidden");
+    elements.previewControls.classList.remove("hidden");
+    elements.previewLegend.classList.remove("hidden");
+    elements.supportVisibility.checked = true;
+    previewController = showModelPreview(elements.modelPreview, data, support);
+    elements.previewHint.textContent = `拖动可旋转。当前叠加最终切片中的 ${support.segment_count.toLocaleString("zh-CN")} 条真实支撑刀路；01 文件是同一份含支撑切片。`;
+  }).catch((error) => {
+    if (previewKey === key && error.name !== "AbortError") elements.previewHint.textContent = "真实支撑预览未通过核验。请先打开 01 含真实支撑切片，不以仅显示本体的工程代替检查。";
+  });
+}
+
+elements.supportVisibility.addEventListener("change", () => {
+  previewController?.setSupportVisible(elements.supportVisibility.checked);
+});
+document.querySelectorAll("[data-preview-view]").forEach((button) => {
+  button.addEventListener("click", () => previewController?.setView(button.dataset.previewView));
+});
 
 function resizeComposer() {
   const visualLines = elements.promptInput.value.split("\n")
@@ -707,6 +935,12 @@ elements.promptInput.addEventListener("keydown", (event) => {
 elements.voiceButton.addEventListener("click", startRecording);
 elements.newJobButton.addEventListener("click", resetComposer);
 elements.history.addEventListener("click", (event) => {
+  const action = event.target.closest("[data-history-action]");
+  if (action) {
+    if (action.dataset.historyAction === "delete") deleteConversation(action.dataset.jobId, action.dataset.jobTitle);
+    else updatePinned(action.dataset.jobId, action.dataset.historyAction);
+    return;
+  }
   const item = event.target.closest("[data-job-id]");
   if (item) selectJob(item.dataset.jobId);
 });
@@ -719,7 +953,20 @@ elements.pauseButton.addEventListener("click", () => runAction(currentSnapshot?.
 elements.stopButton.addEventListener("click", () => showDialog(elements.stopDialog));
 $("#cancelStop").addEventListener("click", () => elements.stopDialog.close());
 $("#confirmStop").addEventListener("click", () => { elements.stopDialog.close(); runAction("stop"); });
-elements.retryButton.addEventListener("click", () => runAction("retry", { start_print: elements.autoPrintToggle.checked }));
+elements.cancelDelete.addEventListener("click", () => {
+  pendingDeleteConversation = null;
+  elements.deleteDialog.close();
+});
+elements.confirmDelete.addEventListener("click", confirmDeleteConversation);
+elements.deleteDialog.addEventListener("close", () => { pendingDeleteConversation = null; });
+elements.retryButton.addEventListener("click", () => runAction("retry", { start_print: false }));
+elements.printButton.addEventListener("click", async () => {
+  if (!currentSnapshot?.delivery?.available) return;
+  if (!confirm("即将上传当前已验收的切片并启动实体打印机。请确认已检查模型与支撑、设备和材料匹配、平台已清空。确定开打？")) return;
+  elements.printButton.disabled = true;
+  try { await runAction("retry", { start_print: true }); }
+  finally { elements.printButton.disabled = false; }
+});
 elements.detailsButton.addEventListener("click", renderDetails);
 $("#closeDetails").addEventListener("click", () => elements.detailsDialog.close());
 $("#copyError").addEventListener("click", async () => {
@@ -751,7 +998,7 @@ async function initialise() {
   } catch (_) {
     elements.printerCaption.textContent = "本地服务尚未连接";
   }
-  await loadJobs(true);
+  await loadJobs(false);
   pollTimer = setInterval(refreshCurrent, 900);
   setInterval(updateElapsed, 1000);
 }

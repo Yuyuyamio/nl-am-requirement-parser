@@ -88,6 +88,8 @@ class M2FdmPromptContractTests(
             "unsupported",
             result.prompt.lower(),
         )
+        self.assertIn("never temporary support pillars", result.prompt.lower())
+        self.assertIn("removable slicer supports", result.prompt.lower())
 
         self.assertLessEqual(
             len(result.prompt),

@@ -10,12 +10,13 @@ import trimesh
 
 
 DEFAULT_LAYER_HEIGHT_MM = 0.2
-DEFAULT_CONTACT_TOLERANCE_MM = 0.05
+DEFAULT_CONTACT_TOLERANCE_MM = 0.001
 DEFAULT_MAX_PLANE_DEVIATION_MM = 0.15
 DEFAULT_MINIMUM_CONTACT_AREA_MM2 = 2.0
 DEFAULT_MINIMUM_FOOTPRINT_RATIO = 0.01
 DEFAULT_MINIMUM_DOMINANT_PATCH_RATIO = 0.8
 DEFAULT_MAXIMUM_PLANE_TILT_DEGREES = 2.0
+DEFAULT_MINIMUM_STABILITY_MARGIN_MM = 0.8
 
 
 class FlatBaseGateError(RuntimeError):
@@ -42,7 +43,8 @@ def _coerce_mesh(
                     "geometry": str(path),
                 },
             )
-        loaded = trimesh.load(path, force="scene", process=True)
+        from am_model_generator.coordinate_frame import load_print_scene
+        loaded = load_print_scene(path, process=True)
         mesh = (
             loaded.to_mesh()
             if isinstance(loaded, trimesh.Scene)
@@ -182,10 +184,11 @@ def inspect_flat_printing_base(
     maximum_plane_tilt_degrees: float = (
         DEFAULT_MAXIMUM_PLANE_TILT_DEGREES
     ),
+    minimum_stability_margin_mm: float = DEFAULT_MINIMUM_STABILITY_MARGIN_MM,
 ) -> dict[str, Any]:
     """Measure whether the current Z-min surface is a real printing plane.
 
-    Only triangle area which is already within a tight band of the lowest Z
+    Only downward-facing triangle area within 1 micron of the lowest Z
     counts as bed contact. Points and edges therefore cannot impersonate a
     printable base. Contact triangles must also form one dominant connected
     patch whose fitted plane is horizontal and within the FDM tolerance.
@@ -209,6 +212,7 @@ def inspect_flat_printing_base(
         maximum_plane_tilt_degrees,
         "maximum_plane_tilt_degrees",
     )
+    stability_margin = _positive_finite(minimum_stability_margin_mm, "minimum_stability_margin_mm")
     if not 0 <= footprint_ratio <= 1:
         raise ValueError("minimum_footprint_ratio must be between 0 and 1")
     if not 0 < dominant_ratio_required <= 1:
@@ -230,7 +234,7 @@ def inspect_flat_printing_base(
     contact_mask = (
         np.max(np.abs(face_z - minimum_z), axis=1)
         <= contact_tolerance + 1e-9
-    ) & (projected_areas > 1e-9)
+    ) & (projected_areas > 1e-9) & (mesh.face_normals[:, 2] < -0.999)
     contact_indices = np.flatnonzero(contact_mask)
     raw_components = _contact_components(mesh, contact_indices)
     component_records: list[dict[str, Any]] = []
@@ -267,6 +271,11 @@ def inspect_flat_printing_base(
     max_plane_deviation = None
     plane_tilt = None
     base_height_range = None
+    center_of_mass = np.asarray(mesh.center_mass, dtype=float)
+    stability = {"center_of_mass_xy_mm": center_of_mass[:2].tolist(),
+                 "center_of_mass_inside_support_polygon": False,
+                 "stability_margin_mm": 0.0,
+                 "required_stability_margin_mm": max(stability_margin, float(extents[2]) * 0.03)}
     if component_records:
         largest_faces = np.asarray(
             component_records[0]["face_indices"],
@@ -282,8 +291,23 @@ def inspect_flat_printing_base(
             largest_vertices[:, 2].max()
             - largest_vertices[:, 2].min()
         )
+        from shapely.geometry import MultiPoint, Point
+        # A ring-shaped base remains stable over its hole: static stability
+        # uses the convex support polygon, not filled contact at the COM.
+        support_polygon = MultiPoint(largest_vertices[:, :2]).convex_hull
+        com_point = Point(center_of_mass[:2])
+        inside = bool(np.isfinite(center_of_mass).all() and support_polygon.covers(com_point))
+        distance = float(support_polygon.boundary.distance(com_point))
+        stability.update(center_of_mass_inside_support_polygon=inside,
+                         stability_margin_mm=distance if inside else -distance)
 
     blockers: list[str] = []
+    if not np.isfinite(center_of_mass).all() or not mesh.is_volume:
+        blockers.append("stable_base_requires_valid_solid_mass")
+    if not stability["center_of_mass_inside_support_polygon"]:
+        blockers.append("center_of_mass_outside_support_polygon")
+    elif stability["stability_margin_mm"] < stability["required_stability_margin_mm"]:
+        blockers.append("insufficient_base_stability_margin")
     if not component_records:
         blockers.append("flat_base_contact_face_required")
     if contact_area + 1e-9 < required_area:
@@ -331,6 +355,7 @@ def inspect_flat_printing_base(
         "max_plane_deviation_mm": max_plane_deviation,
         "base_height_range_mm": base_height_range,
         "base_plane_tilt_degrees": plane_tilt,
+        "stability": stability,
         "minimum_z_mm": minimum_z,
         "footprint_area_mm2": footprint_area,
         "final_extents_mm": [float(value) for value in extents],
@@ -341,6 +366,7 @@ def inspect_flat_printing_base(
             "minimum_footprint_ratio": footprint_ratio,
             "minimum_dominant_patch_ratio": dominant_ratio_required,
             "maximum_plane_tilt_degrees": maximum_tilt,
+            "minimum_stability_margin_mm": stability_margin,
         },
     }
 
@@ -350,6 +376,8 @@ def ensure_flat_printing_base(
     *,
     layer_height_mm: float = DEFAULT_LAYER_HEIGHT_MM,
     maximum_clip_depth_mm: float | None = None,
+    allow_foundation: bool = False,
+    critical_regions: tuple[dict[str, Any], ...] = (),
 ) -> tuple[trimesh.Trimesh, dict[str, Any]]:
     """Preserve an existing flat base or minimally clip and cap a curved one."""
 
@@ -409,6 +437,17 @@ def ensure_flat_printing_base(
                 "after": last_report,
             }
         depth += step
+
+    if allow_foundation:
+        from am_print_executor.printable_foundation import add_printable_foundation
+        try:
+            candidate, action = add_printable_foundation(source, critical_regions=critical_regions)
+            last_report = inspect_flat_printing_base(candidate)
+            if last_report["base_flatness_passed"]:
+                return candidate, {"status": "foundation_added", "applied": True,
+                                   "clip_depth_mm": 0.0, "before": before, "after": last_report, **action}
+        except ValueError as exc:
+            last_report = {"blockers": [str(exc)]}
 
     raise FlatBaseGateError(
         "FLAT_BASE_GATE = BLOCK: a safe dominant planar patch could not be "

@@ -17,6 +17,7 @@ from am_print_executor.x1c_connection import (
     PrinterConnectionStatus,
 )
 from am_print_frontend.server import (
+    ApiError,
     JobManager,
     PrinterConnectionManager,
     create_server,
@@ -73,6 +74,8 @@ class TestPrintFrontendServer(unittest.TestCase):
                     ),
                     "printer_connected": bool(connection.get("connected")),
                     "printer_ip": connection.get("printer_ip"),
+                    "start_print": kwargs["config"].start_print,
+                    "support_mode": kwargs["config"].support_mode,
                 }
             )
             config = kwargs["config"]
@@ -213,6 +216,114 @@ class TestPrintFrontendServer(unittest.TestCase):
 
         jobs = self.get_json("/api/jobs")["jobs"]
         self.assertEqual(jobs[0]["job_id"], job_id)
+
+    def test_conversations_can_be_pinned_persisted_and_safely_deleted(self) -> None:
+        def create(text: str) -> str:
+            request = Request(
+                self.base + "/api/jobs",
+                data=json.dumps({"transcript": text, "start_print": False}).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlopen(request, timeout=2) as response:
+                job_id = str(json.load(response)["job_id"])
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if self.get_json(f"/api/jobs/{job_id}").get("terminal"):
+                    break
+                time.sleep(.01)
+            return job_id
+
+        older = create("需要长期保留的对话")
+        time.sleep(.01)
+        newer = create("较新的普通对话")
+        pin = Request(
+            self.base + f"/api/jobs/{older}/pin",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(pin, timeout=2) as response:
+            self.assertTrue(json.load(response)["pinned"])
+        jobs = self.get_json("/api/jobs")["jobs"]
+        self.assertEqual([jobs[0]["job_id"], jobs[1]["job_id"]], [older, newer])
+        self.assertTrue(jobs[0]["pinned"])
+
+        restarted = JobManager(output_root=self.root / "jobs")
+        self.assertEqual(restarted.list_jobs()[0]["job_id"], older)
+        self.assertTrue(restarted.snapshot(older)["pinned"])
+
+        unpin = Request(
+            self.base + f"/api/jobs/{older}/unpin",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(unpin, timeout=2) as response:
+            self.assertFalse(json.load(response)["pinned"])
+        self.assertEqual(self.get_json("/api/jobs")["jobs"][0]["job_id"], newer)
+
+        with urlopen(pin, timeout=2):
+            pass
+
+        delete = Request(self.base + f"/api/jobs/{older}", method="DELETE")
+        with urlopen(delete, timeout=2) as response:
+            deleted = json.load(response)
+        self.assertEqual(deleted["status"], "deleted")
+        self.assertTrue(deleted["recoverable"])
+        with self.assertRaises(HTTPError) as missing:
+            urlopen(self.base + f"/api/jobs/{older}", timeout=2)
+        self.assertEqual(missing.exception.code, 404)
+        self.assertNotIn(older, [job["job_id"] for job in self.get_json("/api/jobs")["jobs"]])
+        archived = list((self.root / "jobs" / ".deleted_jobs").glob(f"{older}-*"))
+        self.assertEqual(len(archived), 1)
+        self.assertTrue((archived[0] / "workflow_state.json").is_file())
+
+    def test_running_conversation_cannot_be_deleted(self) -> None:
+        release = threading.Event()
+
+        def blocking_runner(transcript: str, **kwargs: object) -> AutomationResult:
+            job_id = str(kwargs["new_job_id"])
+            directory = self.root / "active-delete" / job_id
+            directory.mkdir(parents=True)
+            now = time.time()
+            state = directory / "workflow_state.json"
+            state.write_text(json.dumps({
+                "job_id": job_id,
+                "status": "running",
+                "current_stage": "m2_wait",
+                "request_text": transcript,
+                "created_unix": now,
+                "updated_unix": now,
+                "start_print_requested": False,
+                "stages": {},
+            }), encoding="utf-8")
+            release.wait(timeout=2)
+            return AutomationResult(
+                job_id=job_id,
+                status="stopped",
+                current_stage=None,
+                job_directory=str(directory),
+                state_file=str(state),
+                m2_task_directory=None,
+                stl_path=None,
+                gcode_path=None,
+                print_status=None,
+            )
+
+        manager = JobManager(output_root=self.root / "active-delete", workflow_runner=blocking_runner)
+        started = manager.start_job("运行中的任务")
+        job_id = str(started["job_id"])
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not (self.root / "active-delete" / job_id / "workflow_state.json").is_file():
+            time.sleep(.01)
+        try:
+            with self.assertRaises(ApiError) as blocked:
+                manager.delete_job(job_id)
+            self.assertEqual(blocked.exception.status, 409)
+            self.assertTrue((self.root / "active-delete" / job_id).is_dir())
+        finally:
+            release.set()
 
     def test_local_speech_transcription_api(self) -> None:
         recording = b"webm-audio" * 40
@@ -420,6 +531,35 @@ class TestPrintFrontendServer(unittest.TestCase):
         self.assertEqual(snapshot["status"], "needs_geometry_regeneration")
         self.assertTrue(snapshot["terminal"])
         self.assertIsNone(snapshot["last_error"])
+
+    def test_job_api_defaults_to_prepare_only_and_detachable_support(self) -> None:
+        request = Request(self.base + "/api/jobs", data=json.dumps({"transcript": "测试默认模式"}).encode(),
+                          headers={"Content-Type": "application/json"}, method="POST")
+        with urlopen(request, timeout=2) as response:
+            job = json.loads(response.read())
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not self.workflow_calls:
+            time.sleep(0.01)
+        self.assertFalse(self.workflow_calls[-1]["start_print"])
+        self.assertEqual(self.workflow_calls[-1]["support_mode"], "detachable")
+        self.assertFalse(self.get_json(f"/api/jobs/{job['job_id']}")["delivery"]["available"])
+
+    def test_string_print_flag_is_rejected_without_starting_job(self) -> None:
+        request = Request(self.base + "/api/jobs", data=b'{"transcript":"test","start_print":"false"}',
+                          headers={"Content-Type": "application/json"}, method="POST")
+        with self.assertRaises(HTTPError) as error:
+            urlopen(request, timeout=2)
+        self.assertEqual(error.exception.code, 400)
+        self.assertFalse(self.workflow_calls)
+
+    def test_external_website_cannot_start_local_job(self) -> None:
+        for header in ({"Origin": "https://untrusted.example"}, {"Host": "untrusted.example"}, {"Sec-Fetch-Site": "cross-site"}):
+            request = Request(self.base + "/api/jobs", data=b'{"transcript":"test","start_print":true}',
+                              headers={"Content-Type": "application/json", **header}, method="POST")
+            with self.assertRaises(HTTPError) as error:
+                urlopen(request, timeout=2)
+            self.assertEqual(error.exception.code, 403)
+        self.assertFalse(self.workflow_calls)
 
 
 if __name__ == "__main__":

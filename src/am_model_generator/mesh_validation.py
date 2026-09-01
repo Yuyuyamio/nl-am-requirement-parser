@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import trimesh
+from .coordinate_frame import load_print_scene
 from jsonschema import Draft202012Validator
 
 from .artifacts import (
@@ -257,7 +258,7 @@ def _load_combined_mesh(
     int,
 ]:
     try:
-        scene = trimesh.load_scene(
+        scene = load_print_scene(
             model_path,
             process=False,
         )

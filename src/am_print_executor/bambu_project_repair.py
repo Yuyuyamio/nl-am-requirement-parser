@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import tempfile
 import zipfile
 
 from pathlib import Path
@@ -126,15 +127,12 @@ def repair_bambu_model_settings_xml(
             f"after={str(repaired_error)!r}"
         ) from repaired_error
 
-    tmp_path = project_path.with_name(
-        project_path.name
-        + ".model_settings_xml_repair.tmp"
-    )
-
-    try:
-        tmp_path.unlink()
-    except FileNotFoundError:
-        pass
+    # Appending a suffix to a valid 241-character Auto Orient path exceeded
+    # Windows MAX_PATH. Keep an independent short, collision-free name beside
+    # the project, so atomic replace stays on the same filesystem.
+    fd, temporary = tempfile.mkstemp(prefix=".r", suffix=".tmp", dir=project_path.parent)
+    os.close(fd)
+    tmp_path = Path(temporary)
 
     try:
         with zipfile.ZipFile(

@@ -37,6 +37,7 @@ def _write_project(
     path: Path,
     *,
     malformed_bambu_value: bool = False,
+    build_transform: str = "1 0 0 0 1 0 0 0 1 0 0 0",
 ):
     value = (
         'value=""X1C";"P1S""'
@@ -54,10 +55,14 @@ def _write_project(
   <plate><model_instance/></plate>
 </config>
 """
-    model = """<?xml version="1.0" encoding="UTF-8"?>
+    mesh = trimesh.creation.box(extents=(20, 20, 20))
+    mesh.apply_translation((0, 0, 10))
+    vertices = "".join(f'<vertex x="{v[0]}" y="{v[1]}" z="{v[2]}"/>' for v in mesh.vertices)
+    triangles = "".join(f'<triangle v1="{f[0]}" v2="{f[1]}" v3="{f[2]}"/>' for f in mesh.faces)
+    model = f"""<?xml version="1.0" encoding="UTF-8"?>
 <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
-  <resources/>
-  <build><item objectid="1"/></build>
+  <resources><object id="1" type="model"><mesh><vertices>{vertices}</vertices><triangles>{triangles}</triangles></mesh></object></resources>
+  <build><item objectid="1" transform="{build_transform}"/></build>
 </model>
 """
 
@@ -81,6 +86,22 @@ def _write_project(
 
 
 class BambuAutoOrientTests(unittest.TestCase):
+    def test_valid_xml_with_tilted_world_geometry_is_rejected(self):
+        # A finite transform and a valid closed mesh are insufficient when
+        # the transformed bottom is an edge rather than a planar footprint.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tilted.3mf"
+            _write_project(path, build_transform="1 0 0 0 0.70710678 0.70710678 0 -0.70710678 0.70710678 0 0 7.0710678")
+            with self.assertRaisesRegex(orient.BambuAutoOrientError, "stable planar bed contact"):
+                orient.inspect_auto_oriented_project(path)
+
+    def test_valid_xml_with_model_above_plate_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "elevated.3mf"
+            _write_project(path, build_transform="1 0 0 0 1 0 0 0 1 0 0 3")
+            with self.assertRaisesRegex(orient.BambuAutoOrientError, "stable planar bed contact"):
+                orient.inspect_auto_oriented_project(path)
+
     def _inputs(self, root: Path):
         studio = root / "bambu-studio.exe"
         source = root / "model.stl"

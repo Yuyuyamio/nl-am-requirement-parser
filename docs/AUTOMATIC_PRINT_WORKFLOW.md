@@ -1,3 +1,5 @@
+> 中文使用入口：[造物台使用说明](ZAOWUTAI_QUICK_START.md)。网页默认只生成文件，实体打印必须主动确认。软件通过不代表已实物试打或验证拆卸力度。
+
 # Automatic print workflow
 
 `am_print_automation` is the application-facing entry point for the complete
@@ -10,7 +12,7 @@ from am_print_automation import AutomationConfig, run_text_to_print
 
 result = run_text_to_print(
     transcript,
-    config=AutomationConfig(start_print=True),
+    config=AutomationConfig(start_print=False),
     access_code_provider=secure_access_code_provider,
     event_sink=show_progress_event,
 )
@@ -20,20 +22,23 @@ The access-code provider is called only after the model and final G-code have
 passed all offline gates. Its value is never written to the workflow state or
 event log. A speech module only needs to produce a `str`; its audio capture and
 transcription implementation can be replaced without changing the manufacturing
-pipeline. The local frontend currently provides a browser speech-recognition
-adapter and always keeps text input available.
+pipeline. The local frontend provides local faster-whisper transcription
+and always keeps editable text input available.
 
 ## Pipeline
 
 1. M1 routes and structures the natural-language requirement.
 2. M2 generates, downloads, validates, repairs when necessary, normalizes, and
    exports the STL handoff.
-3. Bambu Studio performs isolated headless Auto Orient and slicing.
-4. M3 checks final toolpath support continuity and bridge safety. A blocked
-   standard slice is automatically re-sliced with a conservative support
-   profile and checked again.
-5. M4 verifies the FTPS upload, reads a fresh strict-IDLE printer state, and
-   publishes one MQTT `project_file` start command.
+3. Prepare a stable flat base and detachable slicer supports; inspect the real toolpath.
+4. Run headless Auto Orient, enforce upright pose, re-slice and inspect the final
+   geometry, flat base, toolpath and support separation. Bounded local repairs
+   never fall back to permanent support pillars. If necessary, regenerate once;
+   if the new geometry is still rejected, stop without uploading or printing.
+5. Expose only receipt-bound final 3MF, G-code 3MF and STL files. The browser
+   preview reads the final STL. Failed, changed or unverified files are blocked.
+6. Only with explicit `start_print=True`, M4 verifies FTPS upload, reads a fresh
+   strict-IDLE printer state and publishes one MQTT `project_file` start command.
 
 Every job stores `workflow_state.json` and `workflow_events.jsonl` below
 `outputs/automatic_jobs/<job-id>/`. Completed deterministic stages are reused

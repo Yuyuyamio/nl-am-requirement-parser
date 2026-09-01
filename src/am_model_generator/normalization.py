@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import trimesh
+from .coordinate_frame import load_print_scene, export_print_glb
 from jsonschema import Draft202012Validator
 
 from am_print_executor.flat_base_gate import (
@@ -292,7 +293,7 @@ def _load_combined_mesh(
     model_path: Path,
 ) -> trimesh.Trimesh:
     try:
-        scene = trimesh.load_scene(
+        scene = load_print_scene(
             model_path,
             process=False,
         )
@@ -384,15 +385,7 @@ def _export_glb_atomic(
     )
 
     try:
-        scene = trimesh.Scene(
-            mesh
-        )
-
-        glb_data = (
-            trimesh.exchange.gltf.export_glb(
-                scene
-            )
-        )
+        glb_data = export_print_glb(mesh)
 
         if not isinstance(
             glb_data,
@@ -429,7 +422,7 @@ def _export_glb_atomic(
         raise
 
 
-def scale_mesh_to_target_height(
+def _scale_geometry_to_target_height(
     mesh: trimesh.Trimesh,
     target_height_mm: float,
     *,
@@ -439,7 +432,12 @@ def scale_mesh_to_target_height(
     trimesh.Trimesh,
     dict[str, Any],
 ]:
-    """Uniformly scale a mesh so its Z extent is the requested height."""
+    """Restore physical size without changing topology or claiming printability.
+
+    Provider meshes have not reached mesh validation/repair yet. Open surfaces
+    with finite nonzero extents can be scaled, but must still pass those later
+    stages before any foundation, slicing or printing is permitted.
+    """
 
     if (
         isinstance(target_height_mm, bool)
@@ -516,10 +514,49 @@ def scale_mesh_to_target_height(
         (0.0, 0.0, -minimum_z)
     )
 
+    actual_height = float(scaled_mesh.extents[2])
+    if not math.isclose(actual_height, target_height,
+                        rel_tol=relative_tolerance, abs_tol=absolute_tolerance_mm):
+        raise M2ProviderError(
+            "M2_NORMALIZATION_HEIGHT_MISMATCH",
+            "缩放后的高度不符合目标高度",
+            details={"actual_height_mm": actual_height, "target_height_mm": target_height},
+        )
+    return scaled_mesh, {
+        "source_height_mm": source_height_mm,
+        "target_height_mm": target_height,
+        "scale_factor": scale_factor,
+        "extents_before_mm": extents_before,
+        "extents_after_mm": _extents_dict(scaled_mesh),
+    }
+
+
+def scale_mesh_to_target_height(
+    mesh: trimesh.Trimesh,
+    target_height_mm: float,
+    *,
+    relative_tolerance: float = 0.0,
+    absolute_tolerance_mm: float = 0.1,
+) -> tuple[trimesh.Trimesh, dict[str, Any]]:
+    """Normalize a repaired mesh and enforce the manufacturing flat-base gate.
+
+    This remains the strict post-repair normalization entry point. The provider
+    size export below intentionally performs only the earlier scaling stage.
+    """
+    scaled_mesh, size = _scale_geometry_to_target_height(
+        mesh, target_height_mm, relative_tolerance=relative_tolerance,
+        absolute_tolerance_mm=absolute_tolerance_mm,
+    )
+    source_height_mm = size["source_height_mm"]
+    target_height = size["target_height_mm"]
+    scale_factor = size["scale_factor"]
+    extents_before = size["extents_before_mm"]
+
     try:
         scaled_mesh, flat_base_repair = ensure_flat_printing_base(
             scaled_mesh,
             layer_height_mm=0.2,
+            allow_foundation=True,
         )
     except FlatBaseGateError as error:
         raise M2ProviderError(
@@ -599,7 +636,12 @@ def export_glb_at_target_height(
     *,
     absolute_tolerance_mm: float = 0.1,
 ) -> dict[str, Any]:
-    """Create and round-trip verify a physical-size GLB artifact."""
+    """Export a physical-size provider GLB, before mesh repair and base creation.
+
+    Only uniform scale and a Z translation are permitted here. Height success
+    is not mesh/flat-base/printability acceptance. Verify the serialized file
+    before replacing any previous destination, and never overwrite the source.
+    """
 
     source_path = Path(
         source_model_path
@@ -607,11 +649,16 @@ def export_glb_at_target_height(
     destination_path = Path(
         destination_model_path
     ).expanduser().resolve()
+    if source_path == destination_path:
+        raise M2ProviderError(
+            "M2_NORMALIZATION_SOURCE_DESTINATION_CONFLICT",
+            "尺寸处理的输出不能覆盖原始模型",
+        )
     source_mesh = _load_combined_mesh(
         source_path
     )
     scaled_mesh, result = (
-        scale_mesh_to_target_height(
+        _scale_geometry_to_target_height(
             source_mesh,
             target_height_mm,
             relative_tolerance=0.0,
@@ -625,14 +672,14 @@ def export_glb_at_target_height(
         parents=True,
         exist_ok=True,
     )
-    _export_glb_atomic(
-        scaled_mesh,
-        destination_path,
+    candidate_path = destination_path.with_name(
+        f".{destination_path.stem}.verify-{uuid.uuid4().hex}.glb"
     )
 
     try:
+        _export_glb_atomic(scaled_mesh, candidate_path)
         roundtrip_mesh = _load_combined_mesh(
-            destination_path
+            candidate_path
         )
         roundtrip_extents = _extents_dict(
             roundtrip_mesh
@@ -667,14 +714,15 @@ def export_glb_at_target_height(
                     ),
                 },
             )
-    except Exception:
-        destination_path.unlink(
-            missing_ok=True
-        )
-        raise
+        candidate_path.replace(destination_path)
+    finally:
+        candidate_path.unlink(missing_ok=True)
 
     return {
         **result,
+        "operation": "uniform_scale_before_mesh_repair",
+        "mesh_validation_required": True,
+        "printability_verified": False,
         "extents_after_roundtrip_mm": (
             roundtrip_extents
         ),
@@ -1932,6 +1980,9 @@ def _reuse_normalized_m2_model(
             "M2_NORMALIZATION_STATE_INCOMPLETE",
             "Manifest指向归一化模型，但归一化工件不存在",
         )
+
+    from .coordinate_frame import require_current_normalized_frame
+    require_current_normalized_frame(normalized_model_path)
 
     receipt = _read_json_object(
         normalization_receipt_path,

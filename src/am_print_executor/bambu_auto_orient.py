@@ -25,7 +25,9 @@ from am_print_executor.flat_base_gate import (
 
 
 class BambuAutoOrientError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, geometry_rejected: bool = False):
+        super().__init__(message)
+        self.geometry_rejected = geometry_rejected
 
 
 _REQUIRED_PROJECT_MEMBERS = {
@@ -177,6 +179,21 @@ def inspect_auto_oriented_project(
             "Auto Orient project has no 3MF build item."
         )
 
+    # Structural XML validity cannot prove an object was put on a usable
+    # face. Inspect the committed world-space geometry after all 3MF part
+    # and build transforms, not the original STL or metadata matrix alone.
+    try:
+        from am_print_executor.slice_geometry_frame import placed_mesh_from_project
+        placed = placed_mesh_from_project(path)
+        flat_base = inspect_flat_printing_base(placed)
+    except Exception as exc:
+        raise BambuAutoOrientError(f"Auto Orient geometry inspection failed: {exc}") from exc
+    if not flat_base["base_flatness_passed"] or abs(float(placed.bounds[0, 2])) > .01:
+        raise BambuAutoOrientError(
+            "Auto Orient did not produce a stable planar bed contact: " + repr(flat_base["blockers"]),
+            geometry_rejected=True,
+        )
+
     return {
         "path": str(path),
         "sha256": _sha256(path),
@@ -186,6 +203,8 @@ def inspect_auto_oriented_project(
         "model_instance_count": len(instances),
         "build_item_count": len(build_items),
         "part_matrices": matrices,
+        "flat_base_after_orientation": flat_base,
+        "geometry_bounds_mm": placed.bounds.tolist(),
     }
 
 
@@ -344,6 +363,7 @@ def auto_orient_with_bambu_cli(
     successful_result: BambuCliResult | None = None
     inspection: dict[str, Any] | None = None
     repair_result: dict[str, object] | None = None
+    geometry_rejections = 0
 
     with tempfile.TemporaryDirectory(
         prefix=".nl_am_bambu_auto_orient_",
@@ -425,8 +445,15 @@ def auto_orient_with_bambu_cli(
                             candidate
                         )
                     )
+                    if source_model is not None and input_path.suffix.lower() == ".stl":
+                        from am_print_executor.semantic_pose_gate import inspect_upright_source_preserved
+                        pose = inspect_upright_source_preserved(input_path, candidate)
+                        if pose["status"] != "pass":
+                            raise BambuAutoOrientError("Auto Orient changed the required upright pose: " + repr(pose), geometry_rejected=True)
+                        inspection["upright_pose"] = pose
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
+                geometry_rejections += int(isinstance(exc, BambuAutoOrientError) and exc.geometry_rejected)
 
             attempts.append(
                 _attempt_record(
@@ -448,6 +475,7 @@ def auto_orient_with_bambu_cli(
             ):
                 os.replace(candidate, output_path)
                 successful_result = result
+                checked_pose = inspection.get("upright_pose")
                 inspection = (
                     inspect_auto_oriented_project(
                         output_path
@@ -456,6 +484,8 @@ def auto_orient_with_bambu_cli(
                 inspection["xml_repair"] = (
                     repair_result
                 )
+                if checked_pose is not None:
+                    inspection["upright_pose"] = checked_pose
                 break
 
             if attempt < max_attempts:
@@ -464,7 +494,8 @@ def auto_orient_with_bambu_cli(
     if successful_result is None or inspection is None:
         raise BambuAutoOrientError(
             "Bambu Auto Orient failed after isolated retries.\n"
-            f"attempts={attempts!r}"
+            f"attempts={attempts!r}",
+            geometry_rejected=geometry_rejections == len(attempts),
         )
 
     return {
