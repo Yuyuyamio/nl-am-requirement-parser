@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import trimesh
 from scipy.spatial import cKDTree
-from am_print_executor.geometry_fidelity_gate import normalized_boolean_copy
+from am_print_executor.mesh_integrity import exact_welded_copy
 from am_print_executor.rigid_multimaterial_project import parse_3mf_leaves
 
 
@@ -14,12 +14,12 @@ def inspect_upright_source_preserved(source: Path, project: Path, *, maximum_til
     the input. Otherwise a baked rotation could hide behind an identity XML
     transform. This is a pose-preservation check, not anatomy recognition.
     """
-    mesh = normalized_boolean_copy(trimesh.load(source, force="mesh", process=False))
+    mesh = exact_welded_copy(trimesh.load(source, force="mesh", process=False))
     leaves = parse_3mf_leaves(project)
     if len(leaves) != 1:
         raise ValueError("upright_pose_check_requires_single_source_leaf")
     leaf = leaves[0]
-    local = normalized_boolean_copy(trimesh.Trimesh(vertices=leaf["vertices_local"], faces=leaf["faces"], process=False))
+    local = exact_welded_copy(trimesh.Trimesh(vertices=leaf["vertices_local"], faces=leaf["faces"], process=False))
     centered_source = mesh.vertices - mesh.vertices.mean(axis=0)
     centered_local = local.vertices - local.vertices.mean(axis=0)
     error = max(cKDTree(centered_source).query(centered_local)[0].max(),

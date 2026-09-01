@@ -18,10 +18,10 @@ def add_printable_foundation(
     source geometry and its height are preserved. Unknown critical regions
     fail closed rather than being silently filled.
     """
-    from am_print_executor.geometry_fidelity_gate import normalized_boolean_copy, mesh_validation
+    from am_print_executor.mesh_integrity import exact_welded_copy, inspect_mesh_integrity
 
-    source = normalized_boolean_copy(mesh)
-    if not mesh_validation(source)["valid"] or source.body_count != 1:
+    source = exact_welded_copy(mesh)
+    if not inspect_mesh_integrity(source)["valid"] or source.body_count != 1:
         raise ValueError("foundation_requires_one_valid_connected_solid")
     if not 0 < footprint_fraction <= 1:
         raise ValueError("footprint_fraction must be in (0, 1]")
@@ -42,7 +42,7 @@ def add_printable_foundation(
         if np.all(foundation.bounds[1] >= bounds[0]) and np.all(foundation.bounds[0] <= bounds[1]):
             raise ValueError("foundation_intersects_critical_region")
     result = trimesh.boolean.union([source, foundation], engine="manifold", check_volume=True)
-    validation = mesh_validation(result)
+    validation = inspect_mesh_integrity(result)
     if not validation["valid"] or result.body_count != 1:
         raise ValueError("foundation_union_invalid")
     return result, {"method": "additive_planar_foundation", "thickness_mm": thickness,

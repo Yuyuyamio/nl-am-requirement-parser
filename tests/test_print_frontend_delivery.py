@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -30,20 +29,19 @@ class TestFinalDelivery(unittest.TestCase):
         project, phash = self.files["project"]
         stl, shash = self.files["stl"]
         gcode, ghash = self.files["gcode"]
-        receipt = {"status": "pass", "support_mode": "detachable", "model_self_support_required": False,
-                   "before_orientation_status": "pass", "after_orientation_status": "pass",
-                   "dangerous_layer_count": 0, "source_unchanged": True,
-                   "flat_base": {"base_flatness_passed": True}, "removal": {"status": "pass"},
-                   "auto_orient": {"status": "auto_orient_complete", "output": {"path": project, "sha256": phash,
-                       "upright_pose": {"status": "pass"}, "flat_base_after_orientation": {"base_flatness_passed": True}}},
-                   "project": project, "geometry": stl, "artifact": gcode,
-                   "geometry_sha256": shash, "artifact_sha256": ghash}
-        prepared = {"status": "slice_complete", "pipeline": "verified_support_orient_reslice_v3",
-                    "support_mode": "detachable", "model_self_support_required": False, "auto_orient_applied": True,
-                    "artifact": {"path": gcode, "sha256": ghash}, "geometry_path": stl, "acceptance": receipt}
+        prepared = {"status": "slice_complete", "pipeline": "bambu_native_direct_print_v2",
+                    "acceptance_basis": "bambu_cli_slice_success",
+                    "post_slice_validation_performed": False,
+                    "support_mode": "detachable", "support_generator": "bambu_studio_native",
+                    "support_type": "tree(auto)", "support_style": "tree_hybrid", "headless": True,
+                    "model_self_support_required": False, "auto_orient_applied": True,
+                    "artifact": {"path": gcode, "sha256": ghash},
+                    "project": {"path": project, "sha256": phash},
+                    "geometry_path": stl, "geometry_sha256": shash}
         self.state = {"status": "ready_to_print", "job_id": self.job.name, "stages": {
             "bambu_slice": {"status": "completed", "result": prepared},
-            "m3_printability": {"status": "completed", "result": {"status": "pass"}},
+            "m3_printability": {"status": "skipped", "result": {
+                "reason": "bambu_slice_success_trusted_without_post_slice_validation"}},
             "bambu_support_reslice": {"status": "skipped"}}}
         self.prepared = prepared
         self.save()
@@ -61,7 +59,7 @@ class TestFinalDelivery(unittest.TestCase):
     def save(self):
         (self.job / "workflow_state.json").write_text(json.dumps(self.state), encoding="utf-8")
 
-    def test_downloads_use_final_receipt_and_preview_uses_same_stl(self):
+    def test_downloads_use_bambu_slice_files_and_preview_uses_same_stl(self):
         with urlopen(self.base) as response:
             delivery = json.load(response)["delivery"]
         self.assertTrue(delivery["available"])
@@ -96,7 +94,6 @@ G1 X12 Y20 E1
         digest = hashlib.sha256(gcode_path.read_bytes()).hexdigest()
         self.files["gcode"] = (str(gcode_path), digest)
         self.prepared["artifact"]["sha256"] = digest
-        self.prepared["acceptance"]["artifact_sha256"] = digest
         self.save()
         with urlopen(self.base + "/support-preview") as response:
             preview = json.load(response)
@@ -121,23 +118,6 @@ G1 X12 Y20 E1
             self.assertEqual(error.exception.code, 409)
             target.write_bytes(original)
 
-    def test_rejected_regeneration_never_falls_back_to_earlier_pass(self):
-        for stage in ("bambu_regeneration_slice", "bambu_regeneration_support_reslice"):
-            state = copy.deepcopy(self.state)
-            state["stages"][stage] = {"status": "completed", "result": {"status": "blocked"}}
-            with self.assertRaises(DeliveryUnavailable):
-                verified_files(state, self.job)
-
-    def test_latest_accepted_regeneration_replaces_original_geometry(self):
-        generated = copy.deepcopy(self.prepared)
-        replacement = self.job / "regenerated.stl"
-        replacement.write_bytes(b"new final geometry")
-        generated["geometry_path"] = generated["acceptance"]["geometry"] = str(replacement)
-        generated["acceptance"]["geometry_sha256"] = hashlib.sha256(replacement.read_bytes()).hexdigest()
-        self.state["stages"]["bambu_regeneration_slice"] = {"status": "completed", "result": generated}
-        self.state["stages"]["m3_regeneration_printability"] = {"status": "completed", "result": {"status": "pass"}}
-        self.assertEqual(verified_files(self.state, self.job)["stl"][0], replacement)
-
     def test_foreign_job_path_is_blocked_even_with_correct_hash(self):
         other = self.root / "foreign.stl"
         other.write_bytes(Path(self.files["stl"][0]).read_bytes())
@@ -145,23 +125,21 @@ G1 X12 Y20 E1
         with self.assertRaises(DeliveryUnavailable):
             verified_files(self.state, self.job)
 
-    def test_all_final_gate_failures_block_downloads(self):
-        for field, value in (("support_mode", "permanent"), ("status", "blocked"),
-                             ("before_orientation_status", "blocked"), ("after_orientation_status", "blocked"),
-                             ("dangerous_layer_count", 1), ("source_unchanged", False),
-                             ("flat_base", {"base_flatness_passed": False}), ("removal", {"status": "blocked"})):
-            state = copy.deepcopy(self.state)
-            state["stages"]["bambu_slice"]["result"]["acceptance"][field] = value
-            with self.subTest(field=field), self.assertRaises(DeliveryUnavailable):
-                verified_files(state, self.job)
+    def test_legacy_printability_fields_do_not_block_bambu_slice_delivery(self):
+        self.prepared.update(
+            dangerous_layer_count=999,
+            flat_base={"base_flatness_passed": False},
+            removal={"status": "blocked", "blockers": ["ignored"]},
+        )
+        self.assertEqual(set(verified_files(self.state, self.job)), {"gcode", "project", "stl"})
 
     def test_blocked_or_legacy_job_never_exposes_artifacts(self):
-        for status in ("needs_geometry_regeneration", "failed", "running", "stopped"):
+        for status in ("printability_blocked", "needs_geometry_regeneration", "failed", "running", "stopped"):
             self.state["status"] = status
             with self.assertRaises(DeliveryUnavailable):
                 verified_files(self.state, self.job)
         self.state["status"] = "ready_to_print"
-        self.prepared.pop("acceptance")
+        self.prepared["pipeline"] = "bambu_native_tree_support_v1"
         with self.assertRaises(DeliveryUnavailable):
             verified_files(self.state, self.job)
 

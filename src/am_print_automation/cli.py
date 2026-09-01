@@ -56,12 +56,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--use-ams", action="store_true")
     parser.add_argument("--ams-mapping", type=_mapping)
     parser.add_argument("--remote-name")
-    parser.add_argument("--minimum-unsupported-area", type=float, default=5.0)
-    parser.add_argument("--maximum-safe-bridge-span", type=float, default=8.0)
-    parser.add_argument("--allow-structural-geometry-changes", action=argparse.BooleanOptionalAction, default=True,
-                        help="Allow a flat foundation and bounded local repairs; disable for precision designs")
-    parser.add_argument("--support-mode", choices=("detachable", "permanent"), default="detachable",
-                        help="Detachable slicer supports by default; permanent permits fused model buttresses")
     parser.add_argument("--json-events", action="store_true")
     args = parser.parse_args(argv)
 
@@ -82,10 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         use_ams=args.use_ams,
         ams_mapping=args.ams_mapping,
         remote_name=args.remote_name,
-        minimum_unsupported_component_mm2=args.minimum_unsupported_area,
-        maximum_safe_bridge_span_mm=args.maximum_safe_bridge_span,
-        allow_structural_geometry_changes=args.allow_structural_geometry_changes,
-        support_mode=args.support_mode,
+        allow_structural_geometry_changes=False,
+        support_mode="detachable",
     )
 
     def events(event: dict[str, object]) -> None:

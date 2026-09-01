@@ -51,12 +51,12 @@ def gate_report_in_geometry_frame(report: dict[str, Any], artifact: Path) -> dic
 
 def placed_mesh_from_project(artifact: Path) -> trimesh.Trimesh:
     from am_print_executor.rigid_multimaterial_project import parse_3mf_leaves
-    from am_print_executor.geometry_fidelity_gate import normalized_boolean_copy
+    from am_print_executor.mesh_integrity import exact_welded_copy
     leaves = parse_3mf_leaves(artifact)
     if not leaves:
         raise ValueError("project_has_no_geometry")
     mesh = trimesh.util.concatenate([trimesh.Trimesh(vertices=leaf["vertices_world"], faces=leaf["faces"], process=False) for leaf in leaves])
-    return normalized_boolean_copy(mesh)
+    return exact_welded_copy(mesh)
 
 
 def verify_source_matches_slice(source: trimesh.Trimesh, artifact: Path, tolerance_mm: float = .001) -> dict:

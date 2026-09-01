@@ -71,6 +71,7 @@ _TERMINAL_STATUSES = {
     "stopped",
     "credentials_required",
     "needs_geometry_regeneration",
+    "printability_blocked",
 }
 
 
@@ -433,7 +434,7 @@ class JobManager:
         if include_events:
             payload["delivery"] = (delivery_summary(state, self.output_root / job_id)
                                    if not alive and status == state.get("status")
-                                   else {"available": False, "message": "等待最终检查完成。"})
+                                   else {"available": False, "message": "等待 Bambu Studio 切片完成。"})
             payload["events"] = _read_events(
                 self.output_root / job_id / "workflow_events.jsonl"
             )
@@ -447,7 +448,7 @@ class JobManager:
         try:
             path, digest = verified_files(self._state(job_id), self.output_root / job_id)[kind]
         except (DeliveryUnavailable, OSError, KeyError, TypeError, AttributeError) as exc:
-            raise ApiError(HTTPStatus.CONFLICT, "最终文件未通过核验，不能下载。") from exc
+            raise ApiError(HTTPStatus.CONFLICT, "Bambu 切片文件不可用，不能下载。") from exc
         return path, DOWNLOAD_NAMES[kind], digest
 
     def support_preview(self, job_id: str) -> dict[str, Any]:
@@ -459,7 +460,7 @@ class JobManager:
             files = verified_files(self._state(job_id), self.output_root / job_id)
             return build_support_preview(files)
         except (DeliveryUnavailable, SupportPreviewError, OSError, TypeError, AttributeError) as exc:
-            raise ApiError(HTTPStatus.CONFLICT, "最终支撑未通过核验，不能预览。") from exc
+            raise ApiError(HTTPStatus.CONFLICT, "Bambu 切片文件不可用，不能预览。") from exc
 
     def _pinned_job_ids(self) -> list[str]:
         stored = _read_json(self._ui_preferences_path) or {}

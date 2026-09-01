@@ -11,7 +11,12 @@ PREPARATION_STAGES = (
 
 
 def can_recover_preparation(state: Mapping[str, Any]) -> bool:
-    if state.get('status') not in {'needs_geometry_regeneration', 'failed', 'stopped'}:
+    if state.get('status') not in {
+        'needs_geometry_regeneration',
+        'printability_blocked',
+        'failed',
+        'stopped',
+    }:
         return False
     if state.get('preparation_revision') == PREPARATION_REVISION:
         return False
@@ -27,7 +32,10 @@ def can_recover_preparation(state: Mapping[str, Any]) -> bool:
     return any(
         stages.get(name, {}).get('status') == 'completed'
         and (result := stages[name].get('result') or {}).get('status') == 'blocked'
-        and result.get('pipeline') == 'verified_support_orient_reslice_v3'
+        and result.get('pipeline') in {
+            'verified_support_orient_reslice_v3',
+            'bambu_native_tree_support_v1',
+        }
         and result.get('preparation_revision') != PREPARATION_REVISION
         for name in PREPARATION_STAGES if name.startswith('bambu_')
     )

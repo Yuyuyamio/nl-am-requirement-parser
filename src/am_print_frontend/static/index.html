@@ -56,8 +56,8 @@
         <section class="welcome" id="welcome">
           <p class="welcome-kicker">从一句话开始</p>
           <h2>今天想创造什么？</h2>
-          <p class="welcome-copy">描述物品、尺寸和姿态。默认先生成、检查并提供成品下载，不启动打印机。</p>
-          <p class="workflow-note">生成模型 → 平底与姿态修复 → 可拆支撑 → Auto Orient → 重切复检 → 成品下载<br>生成期间请关闭 Bambu Studio 窗口；完成后再打开文件检查。</p>
+          <p class="welcome-copy">描述物品、尺寸和姿态。默认由 Bambu Studio 自动定向、添加树状支撑并切片。</p>
+          <p class="workflow-note">生成模型 → Bambu Auto Orient → Bambu 树状支撑切片 → 下载或直接打印<br>切片成功即放行，不再执行额外可打印性检查。</p>
           <div class="suggestions" aria-label="示例需求">
             <button type="button" data-prompt="打印一个 12 厘米高的极简螺旋花瓶，底部要稳，适合放在书桌上。">
               <span>01</span><strong>螺旋花瓶</strong><small>极简 · 12 cm</small>
@@ -157,7 +157,7 @@
             <div class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
             <span id="voiceStatus">录音结束后会在本机转成可编辑文字</span>
           </div>
-          <div class="composer-note">默认只生成文件。模型生成不保证每次通过；检查失败会停止。实际打印前请核对材料、喷嘴和首层。</div>
+          <div class="composer-note">默认只生成文件；开启自动打印后，Bambu 切片成功即上传开打。请提前确认材料、喷嘴和平台状态。</div>
         </div>
       </main>
     </div>

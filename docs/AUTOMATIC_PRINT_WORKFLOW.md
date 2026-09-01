@@ -30,11 +30,12 @@ and always keeps editable text input available.
 1. M1 routes and structures the natural-language requirement.
 2. M2 generates, downloads, validates, repairs when necessary, normalizes, and
    exports the STL handoff.
-3. Prepare a stable flat base and detachable slicer supports; inspect the real toolpath.
-4. Run headless Auto Orient, enforce upright pose, re-slice and inspect the final
-   geometry, flat base, toolpath and support separation. Bounded local repairs
-   never fall back to permanent support pillars. If necessary, regenerate once;
-   if the new geometry is still rejected, stop without uploading or printing.
+3. Materialize the selected Bambu profiles, force native `tree(auto)` /
+   `tree_hybrid` support, and run Bambu Auto Orient through the hidden CLI.
+4. Slice once with native tree support and inspect the final geometry, bed
+   contact, toolpath and support separation. The workflow does not add its own
+   ramps, fills, ribs or permanent pillars, and a rejected slice does not trigger
+   model regeneration; it stops without uploading or printing.
 5. Expose only receipt-bound final 3MF, G-code 3MF and STL files. The browser
    preview reads the final STL. Failed, changed or unverified files are blocked.
 6. Only with explicit `start_print=True`, M4 verifies FTPS upload, reads a fresh

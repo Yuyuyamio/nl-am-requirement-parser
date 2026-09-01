@@ -12,10 +12,7 @@ const STAGES = [
   { id: "m2_normalize", title: "标准化模型", detail: "统一坐标、比例和模型格式" },
   { id: "m2_normalized_validation", title: "验证标准模型", detail: "执行最终模型硬约束检查" },
   { id: "m2_stl_handoff", title: "生成 STL", detail: "准备切片所需的标准模型" },
-  { id: "bambu_slice", title: "平底、可拆支撑与摆正", detail: "检查平底和支撑，再运行 Auto Orient 并重新切片复检" },
-  { id: "m3_printability", title: "检查打印安全", detail: "检查悬垂、桥接与支撑连续性" },
-  { id: "bambu_support_reslice", title: "添加支撑并重切", detail: "必要时自动使用保守支撑方案" },
-  { id: "m3_support_printability", title: "复检支撑切片", detail: "确认最终刀路通过安全门" },
+  { id: "bambu_slice", title: "Bambu 自动定向与树状支撑", detail: "后台调用 Bambu Studio 自动摆放并生成树状支撑" },
   { id: "printer_upload", title: "上传打印文件", detail: "安全传输并校验打印文件" },
   { id: "print_start", title: "启动打印", detail: "向空闲打印机发送一次启动指令" },
 ];
@@ -25,9 +22,8 @@ const GROUPS = [
   { title: "生成 3D 模型", detail: "规划并生成模型文件", stages: ["m2_plan", "m2_submit", "m2_wait", "m2_artifact"] },
   { title: "修复并验证模型", detail: "检查网格、修复并标准化", stages: ["m2_raw_validation", "m2_mesh_repair", "m2_repaired_validation", "m2_normalize", "m2_normalized_validation"] },
   { title: "准备 STL", detail: "创建稳定的切片输入", stages: ["m2_stl_handoff"] },
-  { title: "平底、可拆支撑与摆正", detail: "修复底部、生成支撑、摆正后重新切片复检", stages: ["bambu_slice"] },
-  { title: "检查打印安全", detail: "检查刀路，必要时自动添加支撑", stages: ["m3_printability", "bambu_support_reslice", "m3_support_printability"] },
-  { title: "上传并开始打印", detail: "校验设备状态后发送打印任务", stages: ["printer_upload", "print_start"] },
+  { title: "自动定向并生成树状支撑", detail: "由 Bambu Studio 在后台完成自动摆放和树状支撑", stages: ["bambu_slice"] },
+  { title: "上传并开始打印", detail: "Bambu 切片完成后直接发送打印任务", stages: ["printer_upload", "print_start"] },
 ];
 
 const STATUS_TEXT = {
@@ -43,7 +39,8 @@ const STATUS_TEXT = {
   manual_reconciliation_required: "需要人工核对",
   print_rejected: "打印机拒绝任务",
   failed: "运行失败",
-  needs_geometry_regeneration: "模型未通过检查",
+  needs_geometry_regeneration: "旧任务待重新切片",
+  printability_blocked: "旧任务待重新切片",
 };
 
 const EVENT_TEXT = {
@@ -260,7 +257,7 @@ function calculateProgress(snapshot) {
         m1: 24, m2_plan: 24, m2_submit: 45, m2_wait: 420, m2_artifact: 30,
         m2_raw_validation: 35, m2_mesh_repair: 75, m2_repaired_validation: 35,
         m2_normalize: 35, m2_normalized_validation: 35, m2_stl_handoff: 24,
-        bambu_slice: 180, m3_printability: 70, bambu_support_reslice: 180,
+        bambu_slice: 180, bambu_support_reslice: 180,
         m3_support_printability: 70, printer_upload: 35, print_start: 24,
       })[stage.id] || 60;
       const activeFraction = .16 + .72 * (1 - Math.exp(-elapsed / timeScale));
@@ -334,11 +331,12 @@ function statusPresentation(snapshot) {
   if (snapshot.status === "paused" || control.status === "pause_requested") return ["任务已暂停", `停在「${current.title}」附近，已完成的结果会保留。`];
   if (control.status === "dispatching") return ["正在启动打印", "启动指令正在发送，这个短暂区间不能暂停或停止。"];
   if (snapshot.status === "ready_to_print") return snapshot.delivery?.available
-    ? ["成品文件已就绪", "最终模型已通过软件检查。请先查看模型和切片支撑，再决定是否打印。"]
-    : ["成品文件需要重新核验", snapshot.delivery?.message || "无法确认最终文件，请重新生成。"];
+    ? ["Bambu 切片已就绪", "Bambu Studio 已完成树状支撑切片，没有执行额外可打印性检查。"]
+    : ["等待 Bambu 切片文件", snapshot.delivery?.message || "Bambu Studio 尚未完成切片。"];
   if (snapshot.status === "needs_geometry_regeneration") return snapshot.preparation_recovery_available
-    ? ["有可用的流程修复", "可以从现有模型重新修复和检查，不必重新生成，也不会自动开打。"]
-    : ["模型未通过检查，已停止", "本轮修复未能通过最终检查，没有上传或开打。模型和详细检查记录已保留。"];
+    ? ["旧任务可以直接重切", "可以复用现有模型交给新版 Bambu 流程重新切片，不再执行旧版检查。"]
+    : ["这是旧版任务状态", "请新建一次任务；新版在 Bambu Studio 切片成功后会直接放行。"];
+  if (snapshot.status === "printability_blocked") return ["这是旧版任务状态", "新版已取消切片后检查；请重新运行任务以直接采用 Bambu Studio 的切片结果。"];
   if (snapshot.status === "print_started") return ["打印任务已发送", "打印机已经接收任务，请留意首层打印状态。"];
   if (snapshot.status === "stopped") return ["任务已完全停止", "没有继续执行后续软件步骤；已完成的安全结果仍然保留。"];
   if (snapshot.status === "awaiting_clarification") return ["还需要一点信息", "补充完整需求后，可以重新开始自动制作。"];
@@ -351,8 +349,6 @@ function statusPresentation(snapshot) {
 function renderTimeline(snapshot) {
   const fragment = document.createDocumentFragment();
   const groups = [...GROUPS];
-  const regenerated = Object.keys(snapshot.stages || {}).filter((id) => id.includes("_regeneration_"));
-  if (regenerated.length) groups.splice(groups.length - 1, 0, { title: "重新生成并复检", detail: "首轮未通过，最多重新生成一次", stages: regenerated });
   groups.forEach((group) => {
     const state = groupState(group, snapshot);
     const item = document.createElement("li");
@@ -409,7 +405,7 @@ function renderControls(snapshot) {
   elements.pauseButton.disabled = !(control.can_pause || canResume);
   elements.pauseButton.innerHTML = canResume ? "▶&nbsp;&nbsp;继续" : "Ⅱ&nbsp;&nbsp;暂停";
   elements.stopButton.disabled = !control.can_stop;
-  const canRetry = snapshot.terminal && (snapshot.preparation_recovery_available || !["ready_to_print", "print_started", "manual_reconciliation_required", "needs_geometry_regeneration", "awaiting_clarification"].includes(snapshot.status));
+  const canRetry = snapshot.terminal && (snapshot.preparation_recovery_available || !["ready_to_print", "print_started", "manual_reconciliation_required", "needs_geometry_regeneration", "printability_blocked", "awaiting_clarification"].includes(snapshot.status));
   elements.retryButton.classList.toggle("hidden", !canRetry);
   if (control.status === "dispatching") elements.controlHint.textContent = "打印启动指令正在发送，不能安全撤回";
   else if (control.status === "stop_requested") elements.controlHint.textContent = "停止请求已收到，正在等待安全检查点";
@@ -619,7 +615,7 @@ async function createJob() {
   }
   elements.sendButton.disabled = true;
   try {
-    if (elements.autoPrintToggle.checked && !confirm("已选择自动打印：检查通过后会上传文件并启动实体打印机。请确认设备、材料与喷嘴匹配，平台已清空。是否开始？")) return;
+    if (elements.autoPrintToggle.checked && !confirm("已选择自动打印：Bambu Studio 切片成功后会直接上传并启动实体打印机，不再执行额外可打印性检查。请确认设备、材料与喷嘴匹配，平台已清空。是否开始？")) return;
     const snapshot = await api("/api/jobs", {
       method: "POST",
       body: JSON.stringify({ transcript, start_print: elements.autoPrintToggle.checked }),
@@ -668,7 +664,7 @@ let previewController = null;
 function renderDelivery(snapshot) {
   const delivery = snapshot.delivery || {};
   elements.deliveryCard.classList.toggle("hidden", !snapshot.terminal);
-  elements.deliveryMessage.textContent = delivery.message || "等待最终检查完成。";
+  elements.deliveryMessage.textContent = delivery.message || "等待 Bambu Studio 切片完成。";
   elements.deliveryLinks.replaceChildren();
   elements.printButton.classList.toggle("hidden", !(delivery.available && snapshot.status === "ready_to_print"));
   for (const file of delivery.available ? delivery.files : []) {
@@ -751,7 +747,7 @@ function renderDetails() {
   const rows = [
     ["流程状态", STATUS_TEXT[currentSnapshot.status] || currentSnapshot.status],
     ["当前步骤", stageMeta(currentSnapshot.current_stage).title],
-    ["打印模式", currentSnapshot.start_print_requested ? "通过检查后自动打印" : "仅生成可打印文件"],
+    ["打印模式", currentSnapshot.start_print_requested ? "Bambu 切片后直接打印" : "仅生成可打印文件"],
     ["控制状态", currentSnapshot.control?.status || "—"],
     ["创建时间", new Date(Number(currentSnapshot.created_unix || 0) * 1000).toLocaleString("zh-CN")],
   ];
@@ -962,7 +958,7 @@ elements.deleteDialog.addEventListener("close", () => { pendingDeleteConversatio
 elements.retryButton.addEventListener("click", () => runAction("retry", { start_print: false }));
 elements.printButton.addEventListener("click", async () => {
   if (!currentSnapshot?.delivery?.available) return;
-  if (!confirm("即将上传当前已验收的切片并启动实体打印机。请确认已检查模型与支撑、设备和材料匹配、平台已清空。确定开打？")) return;
+  if (!confirm("即将上传当前 Bambu Studio 切片并启动实体打印机。系统不会再做额外可打印性检查；请确认设备、材料与喷嘴匹配、平台已清空。确定开打？")) return;
   elements.printButton.disabled = true;
   try { await runAction("retry", { start_print: true }); }
   finally { elements.printButton.disabled = false; }

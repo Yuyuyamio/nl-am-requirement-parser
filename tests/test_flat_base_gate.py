@@ -4,7 +4,6 @@ import tempfile
 import unittest
 
 from pathlib import Path
-from unittest import mock
 
 import numpy as np
 import trimesh
@@ -15,9 +14,6 @@ from am_print_executor.flat_base_gate import (
     inspect_flat_printing_base,
 )
 from am_print_executor.gcode_printability_gate import inspect_mesh_topology
-from am_print_executor.m3_printability_optimizer import (
-    export_orientation_candidates,
-)
 
 
 FIXTURE_DIRECTORY = (
@@ -150,54 +146,6 @@ class FlatBaseGateTests(unittest.TestCase):
                 for blocker in result["blockers"]
             )
         )
-
-    def test_orientation_search_rejects_candidate_that_loses_flat_base(
-        self,
-    ) -> None:
-        cone = trimesh.creation.cone(radius=10.0, height=30.0, sections=64)
-        cone.apply_translation((0.0, 0.0, 15.0))
-        identity = np.eye(4)
-        side = trimesh.transformations.rotation_matrix(
-            np.pi / 2.0,
-            (1.0, 0.0, 0.0),
-        )
-        orientation_report = {
-            "top_candidates": [
-                {
-                    "transform": identity.tolist(),
-                    "source": "protected_base",
-                    "stable_probability": 1.0,
-                    "score": 1.0,
-                    "overhang_area_mm2": 0.0,
-                },
-                {
-                    "transform": side.tolist(),
-                    "source": "curved_side",
-                    "stable_probability": 0.5,
-                    "score": 0.5,
-                    "overhang_area_mm2": 10.0,
-                },
-            ]
-        }
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "cone.stl"
-            cone.export(source)
-            with mock.patch(
-                "am_print_executor.m3_printability_optimizer.orient_for_printing",
-                return_value=orientation_report,
-            ):
-                candidates = export_orientation_candidates(
-                    input_stl=source,
-                    work_dir=root / "candidates",
-                    top_n=2,
-                )
-
-        self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["source"], "protected_base")
-        self.assertTrue(candidates[0]["flat_base"]["base_flatness_passed"])
-
 
 if __name__ == "__main__":
     unittest.main()

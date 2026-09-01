@@ -263,6 +263,8 @@ def auto_orient_with_bambu_cli(
     assemble_list: Path | None = None,
     build_plate: str | None = None,
     extra_options: Sequence[str] = (),
+    require_flat_source: bool = True,
+    preserve_source_upright: bool = True,
     max_attempts: int = 3,
     timeout: float = 600,
 ) -> dict[str, Any]:
@@ -327,7 +329,7 @@ def auto_orient_with_bambu_cli(
         )
 
     flat_base_gate: dict[str, Any] | None = None
-    if source_model is not None:
+    if source_model is not None and require_flat_source:
         try:
             flat_base_gate = inspect_flat_printing_base(input_path)
         except FlatBaseGateError as exc:
@@ -445,7 +447,11 @@ def auto_orient_with_bambu_cli(
                             candidate
                         )
                     )
-                    if source_model is not None and input_path.suffix.lower() == ".stl":
+                    if (
+                        source_model is not None
+                        and preserve_source_upright
+                        and input_path.suffix.lower() == ".stl"
+                    ):
                         from am_print_executor.semantic_pose_gate import inspect_upright_source_preserved
                         pose = inspect_upright_source_preserved(input_path, candidate)
                         if pose["status"] != "pass":

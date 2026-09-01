@@ -31,23 +31,15 @@ class FakeServices:
         raw_mesh_passes: bool = True,
         fail_slice_once: bool = False,
         interrupt_start: bool = False,
-        initial_printability_passes: bool = True,
-        support_printability_passes: bool = True,
-        regeneration_printability_passes: bool = True,
     ) -> None:
         self.root = root
         self.clarification = clarification
         self.raw_mesh_passes = raw_mesh_passes
         self.fail_slice_once = fail_slice_once
         self.interrupt_start = interrupt_start
-        self.initial_printability_passes = initial_printability_passes
-        self.support_printability_passes = support_printability_passes
-        self.regeneration_printability_passes = regeneration_printability_passes
-        self.regeneration_feedback: dict[str, Any] | None = None
         self.calls: list[str] = []
         self.validate_count = 0
         self.start_count = 0
-        self.printability_count = 0
         self.printer_connection: dict[str, Any] | None = None
 
     def _call(self, name: str) -> None:
@@ -84,19 +76,6 @@ class FakeServices:
 
     def submit_m2(self, task_dir: Path) -> dict[str, Any]:
         self._call("m2_submit")
-
-        feedback_path = (
-            task_dir
-            / "manufacturability_feedback.json"
-        )
-
-        if feedback_path.is_file():
-            self.regeneration_feedback = json.loads(
-                feedback_path.read_text(
-                    encoding="utf-8-sig"
-                )
-            )
-
         return {"status": "submitted"}
 
     def poll_m2(self, task_dir: Path) -> dict[str, Any]:
@@ -159,108 +138,6 @@ class FakeServices:
             "printer_ip": "192.168.1.2",
             "device_id": "FAKE",
             "gcode_entries": ["Metadata/plate_1.gcode"],
-        }
-
-    def validate_gcode(
-        self,
-        gcode_path: Path,
-        geometry_path: Path,
-    ) -> dict[str, Any]:
-        self._call("m3_printability")
-        self.printability_count += 1
-
-        if self.printability_count == 1:
-            passed = (
-                self.initial_printability_passes
-            )
-
-        if self.printability_count == 2:
-            passed = (
-                self.support_printability_passes
-            )
-
-        if self.printability_count >= 3:
-            passed = (
-                self.regeneration_printability_passes
-            )
-
-        return {
-            "status":
-                "pass"
-                if passed
-                else "blocked",
-
-            "blockers":
-                []
-                if passed
-                else [
-                    "unsupported_model_region"
-                ],
-
-            "resolution":
-                (
-                    "physical_printability_verified"
-                    if passed
-                    else "needs_geometry_regeneration"
-                ),
-
-            "dangerous_layer_count":
-                0
-                if passed
-                else 1,
-
-            "total_bad_area_mm2":
-                0.0
-                if passed
-                else 1.2,
-
-            "worst_bad_area_mm2":
-                0.0
-                if passed
-                else 0.8,
-
-            "longest_bad_bridge_mm":
-                0.0
-                if passed
-                else 6.0,
-
-            "feedback_to_m2":
-                (
-                    {}
-                    if passed
-                    else {
-                        "reason":
-                            "unsupported layer island",
-
-                        "required_changes": [
-                            (
-                                "connect floating "
-                                "geometry to printable "
-                                "material"
-                            ),
-                        ],
-
-                        "dangerous_layers": [
-                            {
-                                "z_mm":
-                                    4.2,
-                            }
-                        ],
-                    }
-                ),
-        }
-
-    def slice_stl_with_support(
-        self,
-        stl_path: Path,
-        output_path: Path,
-    ) -> dict[str, Any]:
-        self._call("bambu_support_reslice")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"fake-supported-gcode")
-        return {
-            "status": "slice_complete",
-            "artifact": {"path": str(output_path), "sha256": "b" * 64},
         }
 
     def start_print(self, upload: dict[str, Any], access_code: str) -> dict[str, Any]:
@@ -339,9 +216,10 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
         self.assertEqual(secret_calls, 0)
         self.assertNotIn("printer_upload", services.calls)
         self.assertNotIn("print_start", services.calls)
+        self.assertNotIn("m3_printability", services.calls)
         self.assertTrue(Path(result.gcode_path or "").is_file())
 
-    def test_repaired_placed_geometry_is_used_for_validation_and_delivery(self) -> None:
+    def test_slice_geometry_is_used_for_delivery_without_validation(self) -> None:
         class RepairedServices(FakeServices):
             def _placed(self, result, output):
                 self.expected_geometry = output.with_suffix(".stl")
@@ -352,55 +230,43 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
             def slice_stl(self, stl_path, output_path):
                 return self._placed(super().slice_stl(stl_path, output_path), output_path)
 
-            def slice_stl_with_support(self, stl_path, output_path):
-                return self._placed(super().slice_stl_with_support(stl_path, output_path), output_path)
-
-            def validate_gcode(self, gcode_path, geometry_path):
-                if geometry_path != self.expected_geometry:
-                    raise AssertionError("workflow used stale geometry instead of final slice geometry")
-                return super().validate_gcode(gcode_path, geometry_path)
-
-        for initially_passes in (True, False):
-            with self.subTest(initially_passes=initially_passes):
-                services = RepairedServices(self.root, initial_printability_passes=initially_passes)
-                result = run_text_to_print("print a figurine", config=self.config(), services=services)
-                self.assertEqual(result.status, "ready_to_print")
-                self.assertEqual(result.stl_path, str(services.expected_geometry))
-                self.assertNotIn("printer_upload", services.calls)
+        services = RepairedServices(self.root)
+        result = run_text_to_print("print a figurine", config=self.config(), services=services)
+        self.assertEqual(result.status, "ready_to_print")
+        self.assertEqual(result.stl_path, str(services.expected_geometry))
+        self.assertNotIn("m3_printability", services.calls)
+        self.assertNotIn("printer_upload", services.calls)
 
     def test_obsolete_preparation_replays_only_local_stages_and_preserves_history(self) -> None:
         from am_print_automation.preparation_recovery import can_recover_preparation, PREPARATION_STAGES
         from am_print_executor.preparation_version import PREPARATION_REVISION
-        failed = FakeServices(self.root, initial_printability_passes=False,
-                              support_printability_passes=False, regeneration_printability_passes=False)
+        failed = FakeServices(self.root)
         result = run_text_to_print('print a figurine', config=self.config(), services=failed)
         state_file = Path(result.state_file)
         old = json.loads(state_file.read_text())
-        for name in PREPARATION_STAGES:
-            if name.startswith('bambu_'):
-                old['stages'][name]['result'].update(status='blocked',pipeline='verified_support_orient_reslice_v3')
+        old['status'] = 'needs_geometry_regeneration'
+        old['stages']['bambu_slice']['result'].update(
+            status='blocked', pipeline='verified_support_orient_reslice_v3'
+        )
         _atomic_write_json(state_file,old)
         self.assertTrue(can_recover_preparation(old))
         recovered = FakeServices(self.root)
         final = run_text_to_print('print a figurine',config=self.config(),services=recovered,resume_job_id=result.job_id)
         self.assertEqual(final.status,'ready_to_print')
-        self.assertEqual(recovered.calls,['bambu_slice','m3_printability'])
+        self.assertEqual(recovered.calls,['bambu_slice'])
         current = json.loads(state_file.read_text())
         self.assertEqual(current['preparation_revision'],PREPARATION_REVISION)
-        self.assertEqual(current['geometry_regeneration_attempts'],1)
+        self.assertNotIn('geometry_regeneration_attempts',current)
         self.assertNotIn('bambu_regeneration_slice',current['stages'])
-        self.assertEqual(current['stages']['m2_regeneration_submit'],old['stages']['m2_regeneration_submit'])
         archives=list(Path(result.job_directory).glob('attempt_history/*/workflow_state.json'))
         self.assertEqual(len(archives),1)
         archived=json.loads(archives[0].read_text())
         self.assertEqual(archived['stages']['bambu_slice'],old['stages']['bambu_slice'])
         self.assertIn(current['preparation_attempt'],final.gcode_path)
-        for name in PREPARATION_STAGES:
-            if name.startswith('bambu_'):
-                self.assertTrue(Path(old['stages'][name]['result']['artifact']['path']).is_file())
+        self.assertTrue(Path(old['stages']['bambu_slice']['result']['artifact']['path']).is_file())
         # Same-revision failure is not a new budget, nor a request to generate again.
         current['status']='needs_geometry_regeneration'
-        current['stages']['bambu_slice']['result'].update(status='blocked',pipeline='verified_support_orient_reslice_v3')
+        current['stages']['bambu_slice']['result'].update(status='blocked',pipeline='bambu_native_direct_print_v2')
         self.assertFalse(can_recover_preparation(current))
 
     def test_preparation_recovery_never_replays_possible_printer_side_effects(self) -> None:
@@ -513,159 +379,11 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
         self.assertEqual(result.status, "ready_to_print")
         self.assertEqual(
             second_services.calls,
-            ["bambu_slice", "m3_printability"],
+            ["bambu_slice"],
         )
 
-    def test_printability_failure_automatically_reslices_with_support(self) -> None:
-        services = FakeServices(
-            self.root,
-            initial_printability_passes=False,
-        )
-        result = run_text_to_print(
-            "打印一个悬垂较多的树屋模型",
-            config=self.config(),
-            services=services,
-        )
-
-        self.assertEqual(result.status, "ready_to_print")
-        self.assertEqual(services.printability_count, 2)
-        self.assertIn("bambu_support_reslice", services.calls)
-        self.assertTrue(
-            (result.gcode_path or "").endswith(".supported.gcode.3mf")
-        )
-
-    def test_support_reslice_block_runs_one_geometry_regeneration(self) -> None:
-        services = FakeServices(
-            self.root,
-            initial_printability_passes=False,
-            support_printability_passes=False,
-            regeneration_printability_passes=True,
-        )
-
-        result = run_text_to_print(
-            "?????????????",
-            config=self.config(),
-            services=services,
-        )
-
-        self.assertEqual(
-            result.status,
-            "ready_to_print",
-        )
-
-        self.assertEqual(
-            services.printability_count,
-            3,
-        )
-
-        self.assertEqual(
-            services.calls.count(
-                "m2_plan"
-            ),
-            2,
-        )
-
-        self.assertEqual(
-            services.calls.count(
-                "m2_submit"
-            ),
-            2,
-        )
-
-        self.assertIsNotNone(
-            services.regeneration_feedback
-        )
-
-        feedback = (
-            services.regeneration_feedback
-            or {}
-        )
-
-        self.assertEqual(
-            feedback.get("status"),
-            "needs_geometry_regeneration",
-        )
-
-        changes = feedback.get(
-            "requested_geometry_changes"
-        )
-
-        self.assertIsInstance(
-            changes,
-            list,
-        )
-
-        self.assertTrue(
-            any(
-                "connected printable solid"
-                in str(item)
-                for item in (
-                    changes
-                    or []
-                )
-            )
-        )
-
-        self.assertTrue(
-            any(
-                "support pillars"
-                in str(item)
-                for item in (
-                    changes
-                    or []
-                )
-            )
-        )
-
-        self.assertTrue(
-            (
-                result.gcode_path
-                or ""
-            ).endswith(
-                ".regenerated.gcode.3mf"
-            )
-        )
-
-        state = json.loads(
-            Path(
-                result.state_file
-            ).read_text(
-                encoding="utf-8"
-            )
-        )
-
-        self.assertEqual(
-            state[
-                "geometry_regeneration_attempts"
-            ],
-            1,
-        )
-
-        self.assertEqual(
-            state[
-                "geometry_regeneration_result"
-            ],
-            "pass",
-        )
-
-        self.assertEqual(
-            state[
-                "printability_resolution"
-            ],
-            (
-                "physical_printability_verified_"
-                "after_regeneration"
-            ),
-        )
-
-    def test_regenerated_geometry_block_stops_after_exactly_one_attempt(self) -> None:
-        services = FakeServices(
-            self.root,
-            initial_printability_passes=False,
-            support_printability_passes=False,
-            regeneration_printability_passes=False,
-        )
-
+    def test_bambu_slice_success_goes_directly_to_upload_and_print(self) -> None:
+        services = FakeServices(self.root)
         secret_calls = 0
 
         def secret() -> str:
@@ -674,94 +392,30 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
             return "TOP-SECRET"
 
         result = run_text_to_print(
-            "??????????????",
-            config=self.config(
-                start_print=True
-            ),
+            "打印一个悬垂较多的树屋模型",
+            config=self.config(start_print=True),
             services=services,
             access_code_provider=secret,
         )
 
+        self.assertEqual(result.status, "print_started")
+        self.assertNotIn("m3_printability", services.calls)
+        self.assertNotIn("bambu_support_reslice", services.calls)
+        self.assertEqual(services.calls.count("m2_plan"), 1)
+        self.assertEqual(services.calls.count("m2_submit"), 1)
+        self.assertIn("printer_upload", services.calls)
+        self.assertIn("print_start", services.calls)
+        self.assertEqual(secret_calls, 1)
+        state = json.loads(Path(result.state_file).read_text(encoding="utf-8"))
+        self.assertNotIn("geometry_regeneration_attempts", state)
+        self.assertNotIn("printability_resolution", state)
+        self.assertEqual(state["stages"]["m3_printability"]["status"], "skipped")
         self.assertEqual(
-            result.status,
-            "needs_geometry_regeneration",
+            state["stages"]["m3_printability"]["result"]["reason"],
+            "bambu_slice_success_trusted_without_post_slice_validation",
         )
-
         self.assertEqual(
-            services.calls.count(
-                "m2_plan"
-            ),
-            2,
-        )
-
-        self.assertEqual(
-            services.calls.count(
-                "m2_submit"
-            ),
-            2,
-        )
-
-        self.assertEqual(
-            services.printability_count,
-            4,
-        )
-
-        self.assertEqual(
-            secret_calls,
-            0,
-        )
-
-        self.assertNotIn(
-            "printer_upload",
-            services.calls,
-        )
-
-        self.assertNotIn(
-            "print_start",
-            services.calls,
-        )
-
-        state = json.loads(
-            Path(
-                result.state_file
-            ).read_text(
-                encoding="utf-8"
-            )
-        )
-
-        self.assertEqual(
-            state[
-                "geometry_regeneration_attempts"
-            ],
-            1,
-        )
-
-        self.assertEqual(
-            state[
-                "geometry_regeneration_result"
-            ],
-            "blocked",
-        )
-
-        self.assertEqual(
-            state[
-                "stages"
-            ][
-                "m3_regeneration_support_printability"
-            ][
-                "status"
-            ],
-            "completed",
-        )
-
-        self.assertEqual(
-            state[
-                "stages"
-            ][
-                "printer_upload"
-            ][
-                "status"
-            ],
+            state["stages"]["bambu_support_reslice"]["status"],
             "skipped",
         )
 
