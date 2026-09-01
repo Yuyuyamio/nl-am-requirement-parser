@@ -1,0 +1,9 @@
+﻿ pyproject.toml                                     |   4 +
+ result.json                                        |   4 +-
+ schemas/m2_normalized_mesh_validation.schema.json  |   8 +
+ scripts/run_m4_x1c_first_color_change_v1121.ps1    | 168 ++++---
+ src/am_model_generator/mesh_validation.py          |  47 ++
+ src/am_model_generator/normalized_validation.py    |  22 +
+ .../developer_mode_backend_v1120.py                | 543 ++++++++++++++++++---
+ .../developer_mode_final_acceptance_v1120.py       | 378 ++++++++++++--
+ 8 files changed, 996 insertions(+), 178 deletions(-)

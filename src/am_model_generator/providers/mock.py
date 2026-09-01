@@ -233,11 +233,8 @@ class MockProvider(GenerationProvider):
             mesh
         )
 
-        glb_data = (
-            trimesh.exchange.gltf.export_glb(
-                scene
-            )
-        )
+        from ..coordinate_frame import export_print_glb
+        glb_data = export_print_glb(mesh)
 
         if not isinstance(
             glb_data,

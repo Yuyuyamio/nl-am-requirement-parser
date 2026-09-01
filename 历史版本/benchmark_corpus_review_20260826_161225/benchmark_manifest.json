@@ -1,0 +1,305 @@
+{
+  "schema_version": "1.0",
+  "purpose": "Strategy-selection benchmark for the text-to-image -> image-to-3D -> automatic FDM-printability pipeline.",
+  "sample_count": 9,
+  "synthetic_count": 7,
+  "real_generation_count": 2,
+  "samples": [
+    {
+      "id": "control_block",
+      "kind": "synthetic",
+      "path": "tests/fixtures/printability_strategy_benchmark_v1/control_block.stl",
+      "sha256": "bd3eda612de075a1e177e7dbe8e97941c8393df936ccab0087cf24b910fa027a",
+      "baseline_geometry": {
+        "vertices": 8,
+        "faces": 12,
+        "watertight": true,
+        "component_count": 1,
+        "bounds_mm": [
+          [
+            -10.0,
+            -10.0,
+            0.0
+          ],
+          [
+            10.0,
+            10.0,
+            20.0
+          ]
+        ],
+        "extents_mm": [
+          20.0,
+          20.0,
+          20.0
+        ],
+        "volume_mm3": 8000.0,
+        "flat_base_status": "pass"
+      }
+    },
+    {
+      "id": "self_support_cone",
+      "kind": "synthetic",
+      "path": "tests/fixtures/printability_strategy_benchmark_v1/self_support_cone.stl",
+      "sha256": "5c5f74d91163ab97e17047f568f27625de297ef8fb839984645a7eaa5513eaf0",
+      "baseline_geometry": {
+        "vertices": 66,
+        "faces": 128,
+        "watertight": true,
+        "component_count": 1,
+        "bounds_mm": [
+          [
+            -10.0,
+            -10.0,
+            0.0
+          ],
+          [
+            10.0,
+            10.0,
+            20.0
+          ]
+        ],
+        "extents_mm": [
+          20.0,
+          20.0,
+          20.0
+        ],
+        "volume_mm3": 2091.0323270306258,
+        "flat_base_status": "pass"
+      }
+    },
+    {
+      "id": "connected_cantilever",
+      "kind": "synthetic",
+      "path": "tests/fixtures/printability_strategy_benchmark_v1/connected_cantilever.stl",
+      "sha256": "6db38ab4a9e9dde4b1c4efb90400748d66c9da7495490fc2333d1caaf219c4e8",
+      "baseline_geometry": {
+        "vertices": 14,
+        "faces": 24,
+        "watertight": true,
+        "component_count": 1,
+        "bounds_mm": [
+          [
+            -4.0,
+            -4.0,
+            0.0
+          ],
+          [
+            18.0,
+            4.0,
+            20.0
+          ]
+        ],
+        "extents_mm": [
+          22.0,
+          8.0,
+          20.0
+        ],
+        "volume_mm3": 1728.0,
+        "flat_base_status": "pass"
+      }
+    },
+    {
+      "id": "bridge_two_piers",
+      "kind": "synthetic",
+      "path": "tests/fixtures/printability_strategy_benchmark_v1/bridge_two_piers.stl",
+      "sha256": "1b981cf0ae8679e2b310948a1a34170a0138d066f60e9cb0eee25e9bc6890b01",
+      "baseline_geometry": {
+        "vertices": 27,
+        "faces": 50,
+        "watertight": true,
+        "component_count": 1,
+        "bounds_mm": [
+          [
+            -10.5,
+            -2.5,
+            0.0
+          ],
+          [
+            10.5,
+            2.5,
+            17.5
+          ]
+        ],
+        "extents_mm": [
+          21.0,
+          5.0,
+          17.5
+        ],
+        "volume_mm3": 1040.0,
+        "flat_base_status": "block"
+      }
+    },
+    {
+      "id": "base_recessed_hole",
+      "kind": "synthetic",
+      "path": "tests/fixtures/printability_strategy_benchmark_v1/base_recessed_hole.stl",
+      "sha256": "1192ce812d5bde1fd9ead7c2c7fc481fe0b174c83d3651fc916adf067499dc08",
+      "baseline_geometry": {
+        "vertices": 137,
+        "faces": 270,
+        "watertight": true,
+        "component_count": 1,
+        "bounds_mm": [
+          [
+            -10.0,
+            -10.0,
+            0.0
+          ],
+          [
+            10.0,
+            10.0,
+            12.0
+          ]
+        ],
+        "extents_mm": [
+          20.0,
+          20.0,
+          12.0
+        ],
+        "volume_mm3": 4549.076124681288,
+        "flat_base_status": "pass"
+      }
+    },
+    {
+      "id": "true_floating_island",
+      "kind": "synthetic",
+      "path": "tests/fixtures/printability_strategy_benchmark_v1/true_floating_island.stl",
+      "sha256": "dd63a81c553b3809e8898a0725f381fe2d2d1fb8e6c07757d11edd26a97c03dd",
+      "baseline_geometry": {
+        "vertices": 170,
+        "faces": 332,
+        "watertight": true,
+        "component_count": 2,
+        "bounds_mm": [
+          [
+            -10.0,
+            -10.0,
+            0.0
+          ],
+          [
+            10.0,
+            10.0,
+            18.0
+          ]
+        ],
+        "extents_mm": [
+          20.0,
+          20.0,
+          18.0
+        ],
+        "volume_mm3": 2509.2702063594293,
+        "flat_base_status": "pass"
+      }
+    },
+    {
+      "id": "organic_head_on_neck",
+      "kind": "synthetic",
+      "path": "tests/fixtures/printability_strategy_benchmark_v1/organic_head_on_neck.stl",
+      "sha256": "f2dbb5e92fe0f45f60dedb2aa821c35e117aeda9c973b2b36e46c3e7a273bc07",
+      "baseline_geometry": {
+        "vertices": 908,
+        "faces": 1812,
+        "watertight": true,
+        "component_count": 1,
+        "bounds_mm": [
+          [
+            -8.0,
+            -8.0,
+            0.0
+          ],
+          [
+            8.0,
+            8.0,
+            28.0
+          ]
+        ],
+        "extents_mm": [
+          16.0,
+          16.0,
+          28.0
+        ],
+        "volume_mm3": 2624.3232725247785,
+        "flat_base_status": "pass"
+      }
+    },
+    {
+      "id": "real_current_kitten",
+      "kind": "real_generation_regression",
+      "path": "tests/fixtures/fdm_false_positive_current_kitten/current_kitten_source.stl",
+      "source_job_id": "AUTO-20260824-145515-EA8493EC",
+      "known_issue": "floating_vertical_shell_and_layer_continuity",
+      "manual_expected_behavior": "must_not_false_pass"
+    },
+    {
+      "id": "real_current_mouse",
+      "kind": "real_generation_regression",
+      "path": "tests/fixtures/flat_base_regression_current_mouse/current_mouse_curved_base.glb",
+      "source_job_id": "AUTO-20260824-161128-9EA75FD9",
+      "source_request": "??????3????????",
+      "known_issue": "curved_and_fragmented_build_plate_contact",
+      "manual_expected_behavior": "flat_base_repair_then_printability_strategy"
+    }
+  ],
+  "responsibility": {
+    "control_block": {
+      "expected_route": "preserve",
+      "identity_change_allowed": false
+    },
+    "self_support_cone": {
+      "expected_route": "preserve",
+      "identity_change_allowed": false
+    },
+    "connected_cantilever": {
+      "expected_route": "mop_or_support",
+      "identity_change_allowed": true
+    },
+    "bridge_two_piers": {
+      "expected_route": "bridge_or_support",
+      "identity_change_allowed": false
+    },
+    "base_recessed_hole": {
+      "expected_route": "preserve_hole",
+      "identity_change_allowed": false,
+      "critical_feature": "base_recess"
+    },
+    "true_floating_island": {
+      "expected_route": "block_and_regenerate_or_geometry_repair",
+      "identity_change_allowed": false,
+      "must_not_be_masked_by_slicer": true
+    },
+    "organic_head_on_neck": {
+      "expected_route": "mop_or_support",
+      "identity_change_allowed": true
+    },
+    "real_current_kitten": {
+      "expected_route": "repair_regenerate_or_supported_printability",
+      "identity_change_allowed": true
+    },
+    "real_current_mouse": {
+      "expected_route": "flat_base_then_printability",
+      "identity_change_allowed": true
+    }
+  },
+  "strategies_planned": [
+    "bambu_normal_auto_support",
+    "bambu_tree_auto_hybrid",
+    "orca_mop_without_support",
+    "orca_mop_plus_support_fallback"
+  ],
+  "evaluation_dimensions": [
+    "topology_validity",
+    "flat_base_preservation",
+    "actual_toolpath_printability",
+    "geometry_identity_preservation",
+    "critical_hole_or_recess_preservation",
+    "support_cost",
+    "strategy_runtime"
+  ],
+  "rules": {
+    "no_sample_specific_geometry_patch": true,
+    "same_strategy_parameters_across_samples": true,
+    "floating_component_must_not_be_hidden": true,
+    "printability_pass_alone_is_not_enough": true,
+    "geometry_fidelity_is_required": true
+  }
+}

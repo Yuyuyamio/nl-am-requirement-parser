@@ -1,0 +1,932 @@
+from __future__ import annotations
+
+import argparse
+import getpass
+import hashlib
+import json
+import os
+import re
+import shutil
+import ssl
+import subprocess
+import sys
+import threading
+import time
+import uuid
+import zipfile
+from pathlib import Path
+from typing import Any, Iterable
+
+PROJECT_ROOT = Path(os.environ.get(
+    "NL_AM_PROJECT_ROOT",
+    r"E:\nl-am-requirement-parser-M2-source-20260804_152224",
+))
+REQUEST_ID = "M2-1E4B2301FADD"
+EXPECTED_DEVICE_ID = "00M09A3A1700722"
+TASK_DIR = PROJECT_ROOT / "outputs" / "m4" / REQUEST_ID
+
+PREFLIGHT_REPORT = TASK_DIR / "m4_developer_backend_preflight_v1000.json"
+DEFAULT_REMOTE_DIR = "/"
+
+
+class DeveloperBackendError(RuntimeError):
+    pass
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError as exc:
+        raise DeveloperBackendError(f"Required JSON missing: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise DeveloperBackendError(f"Invalid JSON: {path}: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise DeveloperBackendError(f"Expected JSON object: {path}")
+    return obj
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    if path.exists():
+        old = path.read_text(encoding="utf-8-sig")
+        if old == text:
+            return
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        backup = path.with_name(path.name + f".pre_{stamp}.bak")
+        backup.write_text(old, encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _safe_remote_name(name: str) -> str:
+    base = Path(name).name
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", base)
+    if not base.lower().endswith(".gcode.3mf"):
+        stem = re.sub(r"\.3mf$", "", base, flags=re.I)
+        base = stem + ".gcode.3mf"
+    return base[:120]
+
+
+def discover_bambu_studio() -> Path | None:
+    env = os.environ.get("BAMBU_STUDIO_EXE")
+    candidates = []
+    if env:
+        candidates.append(Path(env))
+
+    which = shutil.which("bambu-studio") or shutil.which("bambu-studio.exe")
+    if which:
+        candidates.append(Path(which))
+
+    candidates.extend(
+        [
+            Path(r"C:\Program Files\Bambu Studio\bambu-studio.exe"),
+            Path(r"C:\Program Files\Bambu Studio\BambuStudio.exe"),
+            Path(r"C:\Users\PC\AppData\Local\Programs\Bambu Studio\bambu-studio.exe"),
+            Path(r"C:\Users\PC\AppData\Local\Programs\Bambu Studio\BambuStudio.exe"),
+        ]
+    )
+
+    for c in candidates:
+        try:
+            if c.is_file():
+                return c.resolve()
+        except OSError:
+            pass
+    return None
+
+
+def inspect_gcode_3mf(path: Path) -> dict[str, Any]:
+    path = path.resolve()
+    if not path.is_file():
+        raise DeveloperBackendError(f"Artifact missing: {path}")
+    if not zipfile.is_zipfile(path):
+        raise DeveloperBackendError(f"Not a valid 3MF ZIP: {path}")
+
+    with zipfile.ZipFile(path, "r") as zf:
+        bad = zf.testzip()
+        if bad is not None:
+            raise DeveloperBackendError(f"Corrupt 3MF member: {bad}")
+        names = zf.namelist()
+
+    entries = sorted(
+        n for n in names
+        if re.fullmatch(r"Metadata/plate_\d+\.gcode", n)
+    )
+    if not entries:
+        raise DeveloperBackendError(
+            "3MF contains no Metadata/plate_<n>.gcode; it is not a sliced printable .gcode.3mf."
+        )
+
+    return {
+        "path": str(path),
+        "sha256": _sha256_file(path),
+        "size_bytes": path.stat().st_size,
+        "gcode_entries": entries,
+        "plate_count": len(entries),
+    }
+
+
+def slice_with_bambu_cli(
+    input_path: Path,
+    output_path: Path,
+    *,
+    studio_exe: Path | None = None,
+    machine_json: Path | None = None,
+    process_json: Path | None = None,
+    filament_jsons: Iterable[Path] | None = None,
+) -> dict[str, Any]:
+    input_path = input_path.resolve()
+    output_path = output_path.resolve()
+
+    if not input_path.is_file():
+        raise DeveloperBackendError(f"Slice input missing: {input_path}")
+
+    studio = studio_exe.resolve() if studio_exe else discover_bambu_studio()
+    if studio is None or not studio.is_file():
+        raise DeveloperBackendError(
+            "Bambu Studio CLI executable not found. Set BAMBU_STUDIO_EXE or pass --studio."
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        str(studio),
+        "--slice", "0",
+        "--debug", "2",
+        "--outputdir", str(output_path.parent),
+        "--export-3mf", output_path.name,
+    ]
+
+    settings = []
+    if machine_json:
+        settings.append(str(machine_json.resolve()))
+    if process_json:
+        settings.append(str(process_json.resolve()))
+    if settings:
+        cmd += ["--load-settings", ";".join(settings)]
+
+    fils = list(filament_jsons or [])
+    if fils:
+        cmd += ["--load-filaments", ";".join(str(x.resolve()) for x in fils)]
+
+    cmd.append(str(input_path))
+
+    creationflags = 0
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+    started = time.time()
+    proc = subprocess.run(
+        cmd,
+        cwd=str(output_path.parent),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+        creationflags=creationflags,
+    )
+
+    if proc.returncode != 0:
+        raise DeveloperBackendError(
+            "Bambu Studio CLI slicing failed.\n"
+            f"returncode={proc.returncode}\n"
+            f"stdout_tail={proc.stdout[-3000:]}\n"
+            f"stderr_tail={proc.stderr[-3000:]}"
+        )
+
+    # Some builds may place the file in outputdir using the requested basename.
+    if not output_path.is_file():
+        alt = output_path.parent / output_path.name
+        if alt.is_file():
+            output_path = alt
+
+    artifact = inspect_gcode_3mf(output_path)
+    return {
+        "status": "slice_complete",
+        "studio_exe": str(studio),
+        "command": cmd,
+        "elapsed_seconds": round(time.time() - started, 3),
+        "artifact": artifact,
+        "stdout_tail": proc.stdout[-2000:],
+        "stderr_tail": proc.stderr[-2000:],
+    }
+
+
+def _retr_remote_bytes(
+    ftp,
+    remote_name: str,
+    expected_size: int | None,
+) -> bytes:
+    # FTPS_RETR_SIZE_FALLBACK_V1200
+    sink = bytearray()
+    try:
+        ftp.retrbinary(f"RETR {remote_name}", sink.extend)
+    except TimeoutError:
+        if expected_size is None or len(sink) != expected_size:
+            raise
+
+    if expected_size is not None and len(sink) != expected_size:
+        raise DeveloperBackendError(
+            "Remote RETR size verification failed: "
+            f"received={len(sink)} expected={expected_size}"
+        )
+    return bytes(sink)
+
+
+def _ftps_upload_verified(
+    artifact_path: Path,
+    access_code: str,
+    *,
+    remote_name: str | None = None,
+) -> dict[str, Any]:
+    from am_print_executor import ftps_probe_v32 as ftps
+
+    if not access_code:
+        raise DeveloperBackendError("Access Code cannot be empty.")
+
+    artifact = inspect_gcode_3mf(artifact_path)
+    identity = ftps.load_gate1_identity(PROJECT_ROOT, REQUEST_ID)
+    if identity["device_id"] != EXPECTED_DEVICE_ID:
+        raise DeveloperBackendError("Locked X1C DEVICE_ID mismatch.")
+
+    ip_address = identity["ip_address"]
+    task_dir = identity["task_dir"]
+
+    fp = ftps.get_server_fingerprint(ip_address)
+    ftps.validate_or_create_ftps_pin(
+        task_dir,
+        ip_address=ip_address,
+        device_id=identity["device_id"],
+        fingerprint=fp,
+    )
+
+    local_path = Path(artifact["path"])
+    if remote_name is None:
+        remote_name = _safe_remote_name(
+            f"{local_path.stem}_{artifact['sha256'][:10]}.gcode.3mf"
+        )
+    else:
+        remote_name = _safe_remote_name(remote_name)
+
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+
+    ftp = ftps.SessionReuseImplicitFTP_TLS(context=context, timeout=120)
+    try:
+        ftp.connect(ip_address, ftps.FTPS_PORT, timeout=120)
+        ftp.login(ftps.FTPS_USERNAME, access_code)
+        ftp.prot_p()
+        ftp.cwd(DEFAULT_REMOTE_DIR)
+
+        exists, remote_size = ftps._remote_exists_by_size(ftp, remote_name)
+        reused = False
+
+        if exists:
+            remote_bytes = _retr_remote_bytes(
+                ftp,
+                remote_name,
+                remote_size,
+            )
+            remote_sha = hashlib.sha256(remote_bytes).hexdigest()
+            if remote_sha != artifact["sha256"]:
+                raise DeveloperBackendError(
+                    f"Remote file already exists with different SHA-256: {remote_name}"
+                )
+            reused = True
+        else:
+            with local_path.open("rb") as f:
+                ftp.storbinary(f"STOR {remote_name}", f)
+
+            exists, remote_size = ftps._remote_exists_by_size(ftp, remote_name)
+            if not exists or remote_size != artifact["size_bytes"]:
+                raise DeveloperBackendError(
+                    f"Remote SIZE verification failed: observed={remote_size}"
+                )
+
+            remote_bytes = _retr_remote_bytes(
+                ftp,
+                remote_name,
+                remote_size,
+            )
+            remote_sha = hashlib.sha256(remote_bytes).hexdigest()
+            if remote_sha != artifact["sha256"]:
+                raise DeveloperBackendError("Remote SHA-256 verification failed.")
+
+        return {
+            "status": "upload_verified",
+            "printer_ip": ip_address,
+            "device_id": identity["device_id"],
+            "remote_dir": DEFAULT_REMOTE_DIR,
+            "remote_name": remote_name,
+            "remote_path": f"{DEFAULT_REMOTE_DIR}/{remote_name}",
+            "local_sha256": artifact["sha256"],
+            "remote_sha256": remote_sha,
+            "remote_size_bytes": remote_size,
+            "reused_existing_remote": reused,
+            "gcode_entries": artifact["gcode_entries"],
+        }
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            try:
+                ftp.close()
+            except Exception:
+                pass
+
+
+def _strict_idle_check(print_obj: dict[str, Any]) -> dict[str, Any]:
+    state = str(print_obj.get("gcode_state", "")).strip().upper()
+    hms = print_obj.get("hms")
+
+    def _num(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    nozzle_target = _num(print_obj.get("nozzle_target_temper"))
+    bed_target = _num(print_obj.get("bed_target_temper"))
+
+    # Match Bambu Studio's official state classification:
+    # active printing: PAUSE / RUNNING / SLICING / PREPARE
+    # finished: FINISH / FAILED
+    active_states = {
+        "PAUSE",
+        "RUNNING",
+        "SLICING",
+        "PREPARE",
+    }
+
+    finished_states = {
+        "FINISH",
+        "FAILED",
+    }
+
+    state_is_active = state in active_states
+
+    safe_terminal_state = (
+        state == "IDLE"
+        or state in finished_states
+    )
+
+    print_error_zero = (
+        print_obj.get("print_error") == 0
+    )
+
+    sdcard_available = (
+        print_obj.get("sdcard") is True
+    )
+
+    hms_empty = (
+        isinstance(hms, list)
+        and len(hms) == 0
+    )
+
+    heater_targets_safe = (
+        nozzle_target is not None
+        and nozzle_target <= 40
+        and bed_target is not None
+        and bed_target <= 40
+    )
+
+    checks = {
+        "official_safe_terminal_state": safe_terminal_state,
+        "official_state_not_active": not state_is_active,
+        "print_error_zero": print_error_zero,
+        "sdcard_available": sdcard_available,
+        "hms_empty": hms_empty,
+        "heater_targets_safe": heater_targets_safe,
+    }
+
+    passed = (
+        safe_terminal_state
+        and not state_is_active
+        and print_error_zero
+        and sdcard_available
+        and hms_empty
+        and heater_targets_safe
+    )
+
+    return {
+        "passed": passed,
+        "checks": checks,
+        "observed": {
+            "gcode_state": print_obj.get("gcode_state"),
+            "print_error": print_obj.get("print_error"),
+            "sdcard": print_obj.get("sdcard"),
+            "hms": hms,
+            "mc_percent": print_obj.get("mc_percent"),
+            "mc_remaining_time": print_obj.get("mc_remaining_time"),
+            "print_real_action": print_obj.get("print_real_action"),
+            "print_gcode_action": print_obj.get("print_gcode_action"),
+            "nozzle_target_temper": print_obj.get("nozzle_target_temper"),
+            "bed_target_temper": print_obj.get("bed_target_temper"),
+        },
+        "state_interpretation": (
+            "active"
+            if state_is_active
+            else "finished"
+            if state in finished_states
+            else "idle"
+            if state == "IDLE"
+            else "unknown"
+        ),
+    }
+
+
+def build_project_file_payload(
+    *,
+    remote_path: str,
+    gcode_entry: str,
+    sequence_id: str,
+    use_ams: bool,
+    ams_mapping: list[int] | None,
+) -> dict[str, Any]:
+    if not remote_path.startswith("/"):
+        raise DeveloperBackendError("Remote print path must be under /cache.")
+    if not re.fullmatch(r"Metadata/plate_\d+\.gcode", gcode_entry):
+        raise DeveloperBackendError("Invalid plate gcode entry.")
+
+    if use_ams:
+        if not ams_mapping:
+            raise DeveloperBackendError(
+                "AMS printing requires an explicit --ams-mapping. Slot mapping is never auto-guessed."
+            )
+        if not all(isinstance(x, int) and -1 <= x <= 255 for x in ams_mapping):
+            raise DeveloperBackendError("AMS mapping must contain integers between -1 and 255.")
+        # V11.2.0 X1/P1/A1 raw MQTT mapping rule.
+        # Keep project filament order; pad unused positions to legacy length 5.
+        # Emit a real JSON array via json.dumps(payload), NOT a nested JSON string.
+        if len(ams_mapping) > 5:
+            raise DeveloperBackendError("X1C AMS mapping cannot exceed 5 project positions.")
+        mapping_value: Any = list(ams_mapping) + [-1] * (5 - len(ams_mapping))
+    else:
+        # Bambu Studio represents the external spool as
+        # a virtual tray. For the legacy X1/P1 mapping,
+        # external-spool project filaments are encoded as -1.
+        mapping_value = [-1]
+
+    return {
+        "print": {
+            "sequence_id": sequence_id,
+            "command": "project_file",
+            "param": gcode_entry,
+            "project_id": "0",
+            "profile_id": "0",
+            "task_id": "0",
+            "subtask_id": "0",
+            "subtask_name": Path(remote_path).name,
+            "file": "",
+            "url": f"ftp://{remote_path}",
+            "md5": "",
+            "timelapse": False,
+            "bed_type": "auto",
+            "bed_levelling": True,
+            "flow_cali": True,
+            "vibration_cali": True,
+            "layer_inspect": True,
+            "ams_mapping": mapping_value,
+            "use_ams": bool(use_ams),
+        }
+    }
+
+
+def _mqtt_start_once(
+    access_code: str,
+    upload: dict[str, Any],
+    *,
+    use_ams: bool,
+    ams_mapping: list[int] | None,
+    observe_seconds: float = 60.0,
+) -> dict[str, Any]:
+    import paho.mqtt.client as mqtt
+    from am_print_executor.gate4_runtime_v407 import _robust_status_read
+
+    ip_address = upload["printer_ip"]
+    device_id = upload["device_id"]
+
+    print_obj, telemetry = _robust_status_read(ip_address, access_code)
+    strict = _strict_idle_check(print_obj)
+    if not strict["passed"]:
+        raise DeveloperBackendError(f"Printer is not in strict safe IDLE state: {strict}")
+
+    gcode_entries = upload["gcode_entries"]
+    if len(gcode_entries) != 1:
+        raise DeveloperBackendError(
+            "V1.0.0 direct backend requires exactly one sliced plate for automatic start."
+        )
+
+    sequence_id = str(int(time.time() * 1000))
+    payload = build_project_file_payload(
+        remote_path=upload["remote_path"],
+        gcode_entry=gcode_entries[0],
+        sequence_id=sequence_id,
+        use_ams=use_ams,
+        ams_mapping=ams_mapping,
+    )
+
+    connected = threading.Event()
+    subscribed = threading.Event()
+    active = threading.Event()
+    callback_errors: list[str] = []
+    ack: dict[str, Any] | None = None
+    observed_states: list[str] = []
+    events: list[dict[str, Any]] = []
+
+    def reason_failed(reason_code: Any) -> bool:
+        marker = getattr(reason_code, "is_failure", None)
+        if marker is not None:
+            return bool(marker)
+        try:
+            return int(reason_code) != 0
+        except Exception:
+            return str(reason_code).lower() not in {"0", "success"}
+
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        if reason_failed(reason_code):
+            callback_errors.append(f"MQTT connect rejected: {reason_code}")
+            connected.set()
+            return
+        connected.set()
+        client.subscribe(f"device/{device_id}/report", qos=0)
+
+    def on_subscribe(client, userdata, mid, reason_codes, properties=None):
+        if any(getattr(x, "is_failure", False) for x in (reason_codes or [])):
+            callback_errors.append("MQTT subscription refused.")
+        subscribed.set()
+
+    def on_message(client, userdata, msg):
+        nonlocal ack
+        try:
+            data = json.loads(msg.payload.decode("utf-8", errors="strict"))
+        except Exception:
+            return
+        pobj = data.get("print") if isinstance(data, dict) else None
+        if not isinstance(pobj, dict):
+            return
+
+        state = pobj.get("gcode_state")
+        if state is not None:
+            s = str(state).upper()
+            if not observed_states or observed_states[-1] != s:
+                observed_states.append(s)
+            if s in {"PREPARE", "RUNNING", "SLICING", "PAUSE", "PAUSED"}:
+                active.set()
+
+        if (
+            str(pobj.get("command", "")) == "project_file"
+            and str(pobj.get("sequence_id", "")) == sequence_id
+        ):
+            ack = dict(pobj)
+
+        events.append(
+            {
+                "command": pobj.get("command"),
+                "sequence_id": pobj.get("sequence_id"),
+                "result": pobj.get("result"),
+                "reason": pobj.get("reason"),
+                "err_code": pobj.get("err_code"),
+                "gcode_state": pobj.get("gcode_state"),
+                "mc_percent": pobj.get("mc_percent"),
+                "mc_remaining_time": pobj.get("mc_remaining_time"),
+                "print_error": pobj.get("print_error"),
+                "hms": pobj.get("hms"),
+                "tray_now": pobj.get("tray_now"),
+                "ams_status": pobj.get("ams_status"),
+            }
+        )
+
+    client = mqtt.Client(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        client_id=f"nl-am-dev-backend-{uuid.uuid4().hex[:10]}",
+        protocol=mqtt.MQTTv311,
+    )
+    client.username_pw_set("bblp", access_code)
+    client.tls_set(cert_reqs=ssl.CERT_NONE)
+    client.tls_insecure_set(True)
+    client.on_connect = on_connect
+    client.on_subscribe = on_subscribe
+    client.on_message = on_message
+
+    try:
+        try:
+            client.connect_timeout = 6.0
+        except Exception:
+            pass
+        try:
+            client.reconnect_delay_set(min_delay=1, max_delay=3)
+        except Exception:
+            pass
+
+        client.connect_async(ip_address, 8883, keepalive=60)
+        client.loop_start()
+
+        if not connected.wait(45):
+            raise DeveloperBackendError("MQTT/TLS connection timeout after automatic retries.")
+        if callback_errors:
+            raise DeveloperBackendError(callback_errors[-1])
+        if not subscribed.wait(12):
+            raise DeveloperBackendError("MQTT subscribe timeout.")
+        if callback_errors:
+            raise DeveloperBackendError(callback_errors[-1])
+
+        info = client.publish(
+            f"device/{device_id}/request",
+            payload=json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
+            qos=0,
+            retain=False,
+        )
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise DeveloperBackendError(f"Local MQTT publish failed rc={info.rc}")
+        info.wait_for_publish(timeout=8)
+        if not info.is_published():
+            raise DeveloperBackendError("MQTT print-start publish did not complete locally.")
+
+        active.wait(observe_seconds)
+
+    finally:
+        try:
+            client.loop_stop()
+        except Exception:
+            pass
+        try:
+            client.disconnect()
+        except Exception:
+            pass
+
+    result_text = str((ack or {}).get("result", "")).strip().lower()
+    rejected = bool(result_text and result_text != "success")
+    started = active.is_set() and not rejected
+
+    return {
+        "status": (
+            "direct_print_started"
+            if started
+            else "direct_print_rejected"
+            if rejected
+            else "direct_print_start_outcome_unknown"
+        ),
+        "published": True,
+        "mqtt_publish_count": 1,
+        "sequence_id": sequence_id,
+        "ack": ack,
+        "observed_states": observed_states,
+        "events_tail": events[-50:],
+        "strict_prestart": strict,
+        "status_read_telemetry": telemetry,
+        "use_ams": use_ams,
+        "ams_mapping": ams_mapping if use_ams else None,
+        "payload": payload,
+        "automatic_retry_publish_count": 0,
+    }
+
+
+def offline_preflight() -> dict[str, Any]:
+    required = [
+        PROJECT_ROOT / "src" / "am_print_executor" / "ftps_probe_v32.py",
+        PROJECT_ROOT / "src" / "am_print_executor" / "gate4_runtime_v407.py",
+        PROJECT_ROOT / "src" / "am_print_executor" / "gate4b_runtime_v411.py",
+        PROJECT_ROOT / "src" / "am_print_executor" / "gate8fb_x1c_native_ai_live_monitor_v860.py",
+        PROJECT_ROOT / "src" / "am_print_executor" / "gate8fc_native_ai_correlation_v880.py",
+    ]
+    missing = [str(p) for p in required if not p.is_file()]
+
+    gate4a_path = TASK_DIR / "m4_gate4a_runtime_preflight_v407.json"
+    gate4b_path = TASK_DIR / "m4_gate4b_developer_mode_first_print_v411.json"
+    native_closeout_path = TASK_DIR / "m4_final_native_ai_closeout_v900.json"
+
+    gate4a = _load_json(gate4a_path)
+    gate4b = _load_json(gate4b_path)
+    closeout = _load_json(native_closeout_path)
+
+    p4 = gate4a.get("policy", {})
+    developer_mode_evidence = (
+        p4.get("developer_mode_manually_confirmed") is True
+        and p4.get("lan_only_mode_manually_confirmed") is True
+    )
+    direct_start_evidence = (
+        gate4b.get("status") == "first_print_started"
+        and gate4b.get("dispatch", {}).get("published") is True
+        and int(gate4b.get("dispatch", {}).get("mqtt_publish_count", 0)) == 1
+    )
+    native_ai_evidence = (
+        closeout.get("status") == "native_ai_live_integration_validated"
+    )
+
+    studio = discover_bambu_studio()
+    warnings = []
+    if studio is None:
+        warnings.append(
+            "Bambu Studio CLI executable was not auto-discovered; set BAMBU_STUDIO_EXE before headless slicing."
+        )
+
+    passed = (
+        not missing
+        and developer_mode_evidence
+        and direct_start_evidence
+        and native_ai_evidence
+    )
+
+    report = {
+        "schema_version": "0.1.0",
+        "module": "M4",
+        "phase": "DEVELOPER-BACKEND",
+        "version": "10.0.0",
+        "created_unix": time.time(),
+        "project_root": str(PROJECT_ROOT),
+        "request_id": REQUEST_ID,
+        "device_id": EXPECTED_DEVICE_ID,
+        "status": (
+            "developer_backend_offline_ready"
+            if passed
+            else "developer_backend_offline_preflight_failed"
+        ),
+        "passed": passed,
+        "validated_existing_evidence": {
+            "developer_mode_and_lan_only_confirmed": developer_mode_evidence,
+            "previous_direct_print_start_confirmed": direct_start_evidence,
+            "native_ai_live_integration_confirmed": native_ai_evidence,
+        },
+        "required_module_files": {
+            "missing": missing,
+            "all_present": not missing,
+        },
+        "bambu_studio_cli": {
+            "auto_discovered": studio is not None,
+            "path": str(studio) if studio else None,
+        },
+        "backend_policy": {
+            "bambu_studio_gui_required": False,
+            "headless_cli_slicing_supported": True,
+            "ftps_upload_supported": True,
+            "mqtt_project_file_start_supported": True,
+            "native_ai_monitoring_retained": True,
+            "ams_supported_only_with_explicit_mapping": True,
+            "ams_slot_auto_guessing": False,
+            "access_code_stored": False,
+            "automatic_retry_print_publish": False,
+            "git_action": False,
+        },
+        "warnings": warnings,
+        "next_live_acceptance": (
+            "one direct Developer Mode print from this backend; preferably one small AMS multi-material job"
+        ),
+    }
+
+    _write_json(PREFLIGHT_REPORT, report)
+    return report
+
+
+def _parse_mapping(text: str | None) -> list[int] | None:
+    if text is None:
+        return None
+    vals = [x.strip() for x in text.split(",") if x.strip()]
+    if not vals:
+        return None
+    try:
+        return [int(x) for x in vals]
+    except ValueError as exc:
+        raise DeveloperBackendError("--ams-mapping must be comma-separated integers.") from exc
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="M4 Developer Mode backend: headless slice -> FTPS -> MQTT direct print."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("preflight")
+
+    p_inspect = sub.add_parser("inspect")
+    p_inspect.add_argument("artifact")
+
+    p_slice = sub.add_parser("slice")
+    p_slice.add_argument("input")
+    p_slice.add_argument("output")
+    p_slice.add_argument("--studio")
+    p_slice.add_argument("--machine")
+    p_slice.add_argument("--process")
+    p_slice.add_argument("--filament", action="append", default=[])
+
+    p_print = sub.add_parser("print")
+    p_print.add_argument("artifact")
+    p_print.add_argument("--remote-name")
+    p_print.add_argument("--use-ams", action="store_true")
+    p_print.add_argument("--ams-mapping")
+    p_print.add_argument("--confirm-start", action="store_true")
+
+    p_full = sub.add_parser("full")
+    p_full.add_argument("input")
+    p_full.add_argument("output")
+    p_full.add_argument("--studio")
+    p_full.add_argument("--machine")
+    p_full.add_argument("--process")
+    p_full.add_argument("--filament", action="append", default=[])
+    p_full.add_argument("--remote-name")
+    p_full.add_argument("--use-ams", action="store_true")
+    p_full.add_argument("--ams-mapping")
+    p_full.add_argument("--confirm-start", action="store_true")
+
+    args = parser.parse_args()
+
+    if args.command == "preflight":
+        report = offline_preflight()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 2
+
+    if args.command == "inspect":
+        print(json.dumps(inspect_gcode_3mf(Path(args.artifact)), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "slice":
+        result = slice_with_bambu_cli(
+            Path(args.input),
+            Path(args.output),
+            studio_exe=Path(args.studio) if args.studio else None,
+            machine_json=Path(args.machine) if args.machine else None,
+            process_json=Path(args.process) if args.process else None,
+            filament_jsons=[Path(x) for x in args.filament],
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command in {"print", "full"}:
+        if not args.confirm_start:
+            raise DeveloperBackendError(
+                "Real print start is blocked. The caller must explicitly set --confirm-start."
+            )
+
+        access_code = getpass.getpass("X1C Access Code (hidden, never stored): ").strip()
+        mapping = _parse_mapping(args.ams_mapping)
+
+        if args.command == "full":
+            slice_result = slice_with_bambu_cli(
+                Path(args.input),
+                Path(args.output),
+                studio_exe=Path(args.studio) if args.studio else None,
+                machine_json=Path(args.machine) if args.machine else None,
+                process_json=Path(args.process) if args.process else None,
+                filament_jsons=[Path(x) for x in args.filament],
+            )
+            artifact_path = Path(slice_result["artifact"]["path"])
+        else:
+            slice_result = None
+            artifact_path = Path(args.artifact)
+
+        upload = _ftps_upload_verified(
+            artifact_path,
+            access_code,
+            remote_name=args.remote_name,
+        )
+
+        start = _mqtt_start_once(
+            access_code,
+            upload,
+            use_ams=bool(args.use_ams),
+            ams_mapping=mapping,
+        )
+
+        result = {
+            "schema_version": "0.1.0",
+            "module": "M4",
+            "version": "10.0.0",
+            "stage": "developer_mode_backend_direct_print",
+            "created_unix": time.time(),
+            "slice": slice_result,
+            "upload": upload,
+            "start": start,
+            "access_code_stored": False,
+            "bambu_studio_gui_used": False,
+        }
+
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        report_path = TASK_DIR / f"m4_developer_backend_live_{stamp}.json"
+        _write_json(report_path, result)
+
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(f"\nEvidence: {report_path}")
+        return 0 if start["status"] == "direct_print_started" else 3
+
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except DeveloperBackendError as exc:
+        print(f"\n[DEVELOPER BACKEND FAIL] {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    except KeyboardInterrupt:
+        print("\nCancelled.", file=sys.stderr)
+        raise SystemExit(130)

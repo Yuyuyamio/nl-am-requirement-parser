@@ -23,6 +23,7 @@
     "volume",
     "extents_mm",
     "target_height_mm",
+    "scale_factor_to_target_height",
     "actual_height_mm",
     "height_error_mm",
     "height_error_ratio",
@@ -98,6 +99,13 @@
     },
     "target_height_mm": {
       "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "scale_factor_to_target_height": {
+      "type": [
+        "number",
+        "null"
+      ],
       "exclusiveMinimum": 0
     },
     "actual_height_mm": {

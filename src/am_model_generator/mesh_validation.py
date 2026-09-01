@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import trimesh
+from .coordinate_frame import load_print_scene
 from jsonschema import Draft202012Validator
 
 from .artifacts import (
@@ -257,7 +258,7 @@ def _load_combined_mesh(
     int,
 ]:
     try:
-        scene = trimesh.load_scene(
+        scene = load_print_scene(
             model_path,
             process=False,
         )
@@ -1094,6 +1095,53 @@ from .model_pipeline_v2 import (
 def validate_m2_mesh(
     task_directory: str | Path,
 ) -> dict[str, Any]:
+    # NORMALIZED_MODEL_ROUTING_V1
+    #
+    # normalized_model.glb has stronger validation semantics
+    # than a raw/repaired mesh:
+    # - exact target-height verification
+    # - normalization provenance
+    # - normalized validation schema
+    #
+    # Route by manifest provenance instead of pretending that
+    # normalized_model.glb is a normal raw mesh.
+    task_path = Path(
+        task_directory
+    ).expanduser().resolve()
+
+    try:
+        manifest_probe = json.loads(
+            (
+                task_path
+                / "m2_manifest.json"
+            ).read_text(
+                encoding="utf-8-sig"
+            )
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+    ):
+        manifest_probe = None
+
+    if (
+        isinstance(
+            manifest_probe,
+            dict,
+        )
+        and manifest_probe.get(
+            "primary_model"
+        )
+        == "normalized_model.glb"
+    ):
+        from .normalized_validation import (
+            validate_normalized_m2_mesh,
+        )
+
+        return validate_normalized_m2_mesh(
+            task_path
+        )
+
     try:
         return _validate_m2_mesh_impl(
             task_directory

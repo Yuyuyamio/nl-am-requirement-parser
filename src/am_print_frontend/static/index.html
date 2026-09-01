@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0d0f12">
+    <meta name="description" content="用自然语言把想法直接变成 3D 打印成品。">
+    <title>造物台 · 自动 3D 打印</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/model-preview.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <div class="mobile-scrim" id="mobileScrim"></div>
+      <aside class="sidebar" id="sidebar">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">造</div>
+          <div>
+            <div class="brand-name">造物台</div>
+            <div class="brand-caption">AI PRINT STUDIO</div>
+          </div>
+          <button class="close-sidebar" id="closeSidebar" type="button" aria-label="关闭菜单">×</button>
+        </div>
+        <button class="new-job" id="newJobButton" type="button"><span>＋</span> 新建打印</button>
+        <div class="sidebar-label">最近任务</div>
+        <nav class="history" id="history" aria-label="最近任务">
+          <div class="history-empty">还没有打印任务</div>
+        </nav>
+        <div class="printer-card">
+          <div class="printer-status unknown" id="printerStatus"><span></span> 尚未检测打印机</div>
+          <strong>Bambu Lab</strong>
+          <small id="printerCaption">请先验证本地 X1C 连接</small>
+          <button class="printer-connect-button" id="printerConnectButton" type="button">连接打印机</button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <button class="mobile-menu" id="mobileMenu" type="button" aria-label="打开菜单">☰</button>
+          <div class="task-title">
+            <div class="eyebrow">当前任务</div>
+            <h1 id="taskTitle">新建打印</h1>
+          </div>
+          <div class="top-actions">
+            <label class="mode-pill" for="autoPrintToggle">
+              <input id="autoPrintToggle" type="checkbox">
+              <span class="switch" aria-hidden="true"></span>
+              <span>自动打印</span>
+            </label>
+            <button class="ghost-button" id="detailsButton" type="button" disabled>任务详情</button>
+            <a class="guide-link" href="/guide" target="_blank" rel="noopener">使用流程</a>
+          </div>
+        </header>
+
+        <section class="welcome" id="welcome">
+          <p class="welcome-kicker">从一句话开始</p>
+          <h2>今天想创造什么？</h2>
+          <p class="welcome-copy">描述物品、尺寸和姿态。默认由 Bambu Studio 自动定向、添加树状支撑并切片。</p>
+          <p class="workflow-note">生成模型 → Bambu Auto Orient → Bambu 树状支撑切片 → 下载或直接打印<br>切片成功即放行，不再执行额外可打印性检查。</p>
+          <div class="suggestions" aria-label="示例需求">
+            <button type="button" data-prompt="打印一个 12 厘米高的极简螺旋花瓶，底部要稳，适合放在书桌上。">
+              <span>01</span><strong>螺旋花瓶</strong><small>极简 · 12 cm</small>
+            </button>
+            <button type="button" data-prompt="打印一只 10 厘米高、坐着的卡通小狗，耳朵稍微大一点。">
+              <span>02</span><strong>卡通小狗</strong><small>可爱 · 桌面摆件</small>
+            </button>
+            <button type="button" data-prompt="打印一个能放三支笔和一把尺子的桌面收纳盒，圆角，黑色简约风格。">
+              <span>03</span><strong>桌面收纳</strong><small>实用 · 圆角</small>
+            </button>
+          </div>
+        </section>
+
+        <section class="conversation hidden" id="conversation" aria-live="polite">
+          <div class="message user-message">
+            <div class="message-label">你</div>
+            <div class="bubble" id="requestText"></div>
+          </div>
+
+          <article class="assistant-message">
+            <div class="assistant-avatar" aria-hidden="true">造</div>
+            <div class="assistant-content">
+              <div class="assistant-heading">
+                <div>
+                  <span class="thinking-dot" id="statusDot"></span>
+                  <strong id="statusTitle">正在启动任务</strong>
+                </div>
+                <span class="elapsed" id="elapsed">刚刚开始</span>
+              </div>
+              <p class="stage-summary" id="stageSummary">正在准备自动制造流程。</p>
+
+              <div class="error-card hidden" id="errorCard" role="alert">
+                <div class="error-symbol">!</div>
+                <div>
+                  <strong id="errorTitle">任务遇到问题</strong>
+                  <p id="errorMessage"></p>
+                  <button id="copyError" type="button">复制错误详情</button>
+                </div>
+              </div>
+
+              <div class="clarification-card hidden" id="clarificationCard">
+                <span>需要补充信息</span>
+                <strong id="clarificationQuestion"></strong>
+                <p>请在下方输入补充后的完整需求，再新建任务。</p>
+              </div>
+
+              <section class="delivery-card hidden" id="deliveryCard" aria-label="最终成品">
+                <h3>最终成品</h3>
+                <p id="deliveryMessage"></p>
+                <div class="preview-controls hidden" id="previewControls">
+                  <label><input id="supportVisibility" type="checkbox" checked> 显示真实可拆支撑</label>
+                  <div aria-label="预览视角">
+                    <button type="button" data-preview-view="three">立体</button>
+                    <button type="button" data-preview-view="front">正面</button>
+                    <button type="button" data-preview-view="side">侧面</button>
+                  </div>
+                </div>
+                <canvas id="modelPreview" class="hidden" aria-label="最终打印预览：蓝色模型与真实可拆支撑，可拖动旋转" width="600" height="330"></canvas>
+                <div class="preview-legend hidden" id="previewLegend"><span class="body">成品本体</span><span class="support">可拆支撑</span><span class="interface">接触界面</span></div>
+                <p id="previewHint" class="preview-hint"></p>
+                <div id="deliveryLinks" class="delivery-links"></div>
+                <button class="control hidden" id="printButton" type="button">确认并开始打印</button>
+              </section>
+
+              <div class="progress-card">
+                <div class="progress-head">
+                  <span id="progressLabel">总进度</span>
+                  <strong id="progressValue">0%</strong>
+                </div>
+                <div class="progress-track"><span id="progressBar"></span></div>
+                <ol class="timeline" id="timeline"></ol>
+                <details class="activity-details">
+                  <summary>查看运行记录 <span id="eventCount">0 条</span></summary>
+                  <div class="event-log" id="eventLog"></div>
+                </details>
+              </div>
+              <div class="control-row" id="controlRow">
+                <button class="control pause" id="pauseButton" type="button">Ⅱ&nbsp;&nbsp;暂停</button>
+                <button class="control stop" id="stopButton" type="button">■&nbsp;&nbsp;停止任务</button>
+                <button class="control retry hidden" id="retryButton" type="button">↻&nbsp;&nbsp;从安全步骤重试</button>
+                <span id="controlHint">暂停会在当前安全步骤结束后生效</span>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <div class="composer-wrap">
+          <form class="composer" id="composerForm">
+            <textarea id="promptInput" rows="1" maxlength="5000" aria-label="描述你想打印的物品" placeholder="描述你想打印的物品……"></textarea>
+            <div class="composer-actions">
+              <button class="tool-button" id="voiceButton" type="button" aria-label="开始语音输入"><span class="mic-core"></span></button>
+              <span class="voice-hint" id="voiceHint">按下说话</span>
+              <button class="send-button" id="sendButton" type="submit" aria-label="开始制作">↑</button>
+            </div>
+          </form>
+          <div class="voice-panel hidden" id="voicePanel" aria-live="polite">
+            <div class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <span id="voiceStatus">录音结束后会在本机转成可编辑文字</span>
+          </div>
+          <div class="composer-note">默认只生成文件；开启自动打印后，Bambu 切片成功即上传开打。请提前确认材料、喷嘴和平台状态。</div>
+        </div>
+      </main>
+    </div>
+
+    <dialog class="printer-dialog" id="printerDialog">
+      <form id="printerConnectionForm">
+        <div class="dialog-head">
+          <div><span>PRINTER CONNECTION</span><strong>连接本地 X1C</strong></div>
+          <button id="closePrinterDialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="printer-form-body">
+          <label>
+            <span>打印机 IP</span>
+            <input id="printerIpInput" name="printer_ip" inputmode="decimal" autocomplete="off" value="172.16.61.6" required>
+            <small>请以打印机“设置 → 网络”当前显示的 IPv4 地址为准；路由器重新分配地址后，这里也要更新。</small>
+          </label>
+          <label>
+            <span>Device ID / Serial</span>
+            <input id="printerDeviceInput" name="device_id" autocomplete="off" value="00M09A3A1700722" placeholder="留空可自动发现">
+          </label>
+          <label>
+            <span>Access Code</span>
+            <input id="printerAccessInput" name="access_code" type="password" autocomplete="new-password" required>
+            <small>仅在内存中用于本次认证，不写入磁盘、任务记录或日志。</small>
+          </label>
+          <div class="printer-connect-result hidden" id="printerConnectResult" role="status"></div>
+        </div>
+        <div class="printer-form-actions">
+          <button id="cancelPrinterConnect" type="button">取消</button>
+          <button class="primary-button" id="submitPrinterConnect" type="submit">验证并连接</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="printer-success-dialog" id="printerSuccessDialog">
+      <div class="printer-success-icon" aria-hidden="true">✓</div>
+      <span class="printer-success-kicker">CONNECTION VERIFIED</span>
+      <h3>打印机连接成功</h3>
+      <p>已完成 MQTT/TLS 认证，并收到一条真实的 X1C 状态消息。</p>
+      <dl>
+        <div><dt>打印机</dt><dd id="printerSuccessIp">—</dd></div>
+        <div><dt>Device ID</dt><dd id="printerSuccessDevice">—</dd></div>
+        <div><dt>连接</dt><dd id="printerSuccessTransport">—</dd></div>
+      </dl>
+      <button id="confirmPrinterSuccess" type="button">确认</button>
+    </dialog>
+
+    <dialog class="details-dialog" id="detailsDialog">
+      <div class="dialog-head">
+        <div><span>任务详情</span><strong id="detailsJobId">—</strong></div>
+        <button id="closeDetails" type="button" aria-label="关闭">×</button>
+      </div>
+      <dl id="detailsList"></dl>
+      <p>访问码不会写入任务文件或显示在这个界面中。</p>
+    </dialog>
+
+    <dialog class="confirm-dialog" id="stopDialog">
+      <div class="confirm-icon">■</div>
+      <h3>停止这个任务？</h3>
+      <p>系统会在当前安全步骤结束后停止，不再进入后续生成、切片或打印步骤。已经发送给打印机的任务不能在这里撤回。</p>
+      <div>
+        <button id="cancelStop" type="button">继续运行</button>
+        <button class="danger-button" id="confirmStop" type="button">确认停止</button>
+      </div>
+    </dialog>
+
+    <dialog class="confirm-dialog delete-dialog" id="deleteDialog">
+      <div class="confirm-icon" aria-hidden="true">删</div>
+      <h3>删除这条对话？</h3>
+      <p id="deleteDialogText"></p>
+      <div>
+        <button id="cancelDelete" type="button">取消</button>
+        <button class="danger-button" id="confirmDelete" type="button">删除对话</button>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

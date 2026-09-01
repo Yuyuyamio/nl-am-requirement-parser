@@ -1,0 +1,58 @@
+{
+  "version": "11.2.0",
+  "offline_only": true,
+  "artifact": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\outputs\\m4\\M2-1E4B2301FADD\\final_assets_v1070\\originium_slug_x1c_bicolor_clean_v1070.gcode.3mf",
+  "logical_tools": [
+    0,
+    1
+  ],
+  "backend_base": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\src\\am_print_executor\\developer_mode_backend_v1000.py",
+  "backend_out": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\src\\am_print_executor\\developer_mode_backend_v1120.py",
+  "acceptance_base": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\src\\am_print_executor\\developer_mode_final_acceptance_v1062.py",
+  "acceptance_out": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\src\\am_print_executor\\developer_mode_final_acceptance_v1120.py",
+  "wrapper_out": "E:\\nl-am-requirement-parser-M2-source-20260804_152224\\src\\am_print_executor\\developer_mode_final_acceptance_rootfix_v1120.py",
+  "historical_mapping_implementation_replaced": "mapping_value: Any = json.dumps(ams_mapping, separators=(\",\", \":\"))",
+  "input_mapping": [
+    0,
+    3
+  ],
+  "wire_mapping": [
+    0,
+    3,
+    -1,
+    -1,
+    -1
+  ],
+  "wire_mapping_python_type": "list",
+  "wire_mapping_json_roundtrip_type": "list",
+  "use_ams": true,
+  "ams_mapping2_present": false,
+  "ams_mapping_info_present": false,
+  "payload_print": {
+    "sequence_id": "V1120_DRYRUN",
+    "command": "project_file",
+    "param": "Metadata/plate_1.gcode",
+    "project_id": "0",
+    "profile_id": "0",
+    "task_id": "0",
+    "subtask_id": "0",
+    "subtask_name": "v1120_dryrun.gcode.3mf",
+    "file": "",
+    "url": "ftp:///v1120_dryrun.gcode.3mf",
+    "md5": "",
+    "timelapse": false,
+    "bed_type": "auto",
+    "bed_levelling": true,
+    "flow_cali": true,
+    "vibration_cali": true,
+    "layer_inspect": true,
+    "ams_mapping": [
+      0,
+      3,
+      -1,
+      -1,
+      -1
+    ],
+    "use_ams": true
+  }
+}

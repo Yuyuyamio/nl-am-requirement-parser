@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import trimesh
+from am_model_generator.coordinate_frame import load_print_scene, export_print_glb
 from jsonschema import Draft202012Validator
 
 from .artifacts import ensure_valid_artifact_receipt
@@ -80,11 +81,7 @@ def export_glb_atomic(
         f".{destination.name}.tmp-{uuid.uuid4().hex}"
     )
 
-    scene = trimesh.Scene(mesh)
-
-    data = trimesh.exchange.gltf.export_glb(
-        scene
-    )
+    data = export_print_glb(mesh)
 
     if not isinstance(data, bytes):
         raise RepairError(
@@ -99,7 +96,7 @@ def load_combined_mesh(
     path: Path,
 ) -> tuple[trimesh.Trimesh, int]:
     try:
-        scene = trimesh.load_scene(
+        scene = load_print_scene(
             path,
             process=False,
         )

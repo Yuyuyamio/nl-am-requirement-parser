@@ -1,0 +1,1530 @@
+﻿diff --git a/pyproject.toml b/pyproject.toml
+index 4c9f804..18493e6 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -14,6 +14,10 @@ dependencies = [
+     "numpy>=1.26,<3",
+     "trimesh>=4.4,<5",
+     "scikit-image>=0.24,<1",
++    "paho-mqtt>=2.1,<3",
++    "ultralytics>=8.4,<9",
++    "shapely>=2,<3",
++    "mapbox-earcut>=1.0.2,<2",
+ ]
+ 
+ [project.scripts]
+diff --git a/result.json b/result.json
+index f3794ef..2e5b6c5 100644
+--- a/result.json
++++ b/result.json
+@@ -1,9 +1,9 @@
+ {
+     "error_string": "Success.",
+-    "export_time": 413,
++    "export_time": 0,
+     "layer_height": 0.0,
+     "plate_index": 0,
+-    "prepare_time": 11,
++    "prepare_time": 2,
+     "return_code": 0,
+     "sparse_infill_density": 0.0,
+     "wall_loops": 0
+diff --git a/schemas/m2_normalized_mesh_validation.schema.json b/schemas/m2_normalized_mesh_validation.schema.json
+index 22f31f4..15019ae 100644
+--- a/schemas/m2_normalized_mesh_validation.schema.json
++++ b/schemas/m2_normalized_mesh_validation.schema.json
+@@ -23,6 +23,7 @@
+     "volume",
+     "extents_mm",
+     "target_height_mm",
++    "scale_factor_to_target_height",
+     "actual_height_mm",
+     "height_error_mm",
+     "height_error_ratio",
+@@ -100,6 +101,13 @@
+       "type": "number",
+       "exclusiveMinimum": 0
+     },
++    "scale_factor_to_target_height": {
++      "type": [
++        "number",
++        "null"
++      ],
++      "exclusiveMinimum": 0
++    },
+     "actual_height_mm": {
+       "type": [
+         "number",
+diff --git a/scripts/run_m4_x1c_first_color_change_v1121.ps1 b/scripts/run_m4_x1c_first_color_change_v1121.ps1
+index faf1cd8..0e5f4e8 100644
+--- a/scripts/run_m4_x1c_first_color_change_v1121.ps1
++++ b/scripts/run_m4_x1c_first_color_change_v1121.ps1
+@@ -1,94 +1,110 @@
+ #requires -Version 5.1
+-$ErrorActionPreference = "Stop"
+ 
+-$Root = 'E:\nl-am-requirement-parser-M2-source-20260804_152224'
+-$TaskDir = Join-Path $Root 'outputs\m4\M2-1E4B2301FADD'
+-$Wrapper = Join-Path $Root 'src\am_print_executor\developer_mode_final_acceptance_rootfix_v1120.py'
+-$Artifact = Join-Path $TaskDir 'final_assets_v1070\originium_slug_x1c_bicolor_clean_v1070.gcode.3mf'
++param(
++    [Parameter(Mandatory=$true)]
++    [string]$JobRequestId,
+ 
+-$MonitorSeconds = 7200
+-$Mapping = '0,3'
++    [Parameter(Mandatory=$true)]
++    [string]$Artifact,
+ 
+-Write-Host "=== M4 X1C FIRST COLOR-CHANGE LIVE ACCEPTANCE V11.2.1 ===" -ForegroundColor Cyan
+-Write-Host "REAL PRINT." -ForegroundColor Yellow
+-Write-Host ""
+-Write-Host "Purpose:"
+-Write-Host "  Validate the corrected X1C raw AMS wire mapping on the first real color change."
+-Write-Host ""
+-Write-Host "Locked wire rule:"
+-Write-Host "  CLI mapping        : [0,3]"
+-Write-Host "  X1C wire mapping   : [0,3,-1,-1,-1]"
+-Write-Host "  ams_mapping2       : OMIT"
+-Write-Host "  ams_mapping_info   : OMIT"
+-Write-Host ""
+-Write-Host "Physical AMS:"
+-Write-Host "  Slot 1 = GRAY PLA"
+-Write-Host "  Slot 4 = YELLOW PLA"
+-Write-Host ""
++    [Parameter(Mandatory=$true)]
++    [string]$AmsMapping,
++
++    [string]$ProjectRoot = '',
++
++    [string]$DeviceEvidenceRequestId = 'M2-1E4B2301FADD',
++
++    [int]$MonitorSeconds = 7200,
++
++    [switch]$ConfirmStart
++)
+ 
+-foreach ($req in @($Wrapper, $Artifact)) {
++$ErrorActionPreference = 'Stop'
++
++if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
++    $ProjectRoot = Split-Path -Parent $PSScriptRoot
++}
++
++$Root = (
++    Resolve-Path -LiteralPath $ProjectRoot
++).Path
++
++$Py = Join-Path `
++    $Root `
++    '.venv\Scripts\python.exe'
++
++$Wrapper = Join-Path `
++    $Root `
++    'src\am_print_executor\developer_mode_final_acceptance_rootfix_v1120.py'
++
++$Artifact = (
++    Resolve-Path -LiteralPath $Artifact
++).Path
++
++foreach ($req in @($Py, $Wrapper, $Artifact)) {
+     if (-not (Test-Path -LiteralPath $req -PathType Leaf)) {
+         throw "Required file missing: $req"
+     }
+ }
+ 
+-$studio = Get-Process -Name 'bambu-studio' -ErrorAction SilentlyContinue
+-if ($studio) {
+-    throw "Bambu Studio is running. Close it completely before this live acceptance."
+-}
++$env:NL_AM_PROJECT_ROOT = $Root
++$env:PYTHONPATH = Join-Path $Root 'src'
+ 
+-# Archive only V11.2 evidence from an earlier attempt, if any.
+-$evidence = @(
+-    (Join-Path $TaskDir 'm4_developer_backend_final_live_events_v1120.jsonl'),
+-    (Join-Path $TaskDir 'm4_developer_backend_final_acceptance_v1120.json')
+-) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+-
+-if ($evidence.Count -gt 0) {
+-    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+-    $archive = Join-Path $TaskDir "archive\before_v1121_live_$stamp"
+-    New-Item -ItemType Directory -Force -Path $archive | Out-Null
+-    foreach ($e in $evidence) {
+-        Move-Item -LiteralPath $e -Destination $archive -Force
+-    }
+-    Write-Host "[ARCHIVE] Previous V11.2 evidence -> $archive"
+-}
++Set-Location -LiteralPath $Root
+ 
+-Write-Host ""
+-Write-Host "=== IMPORTANT ===" -ForegroundColor Yellow
+-Write-Host "No standalone TCP probe."
+-Write-Host "No Test-NetConnection."
+-Write-Host "No AMS remapping step."
+-Write-Host "No Bambu Studio GUI."
+-Write-Host ""
+-Write-Host "The first decisive checkpoint is the FIRST GRAY -> YELLOW change."
+-Write-Host "If the printer reports 'Failed to get AMS mapping table' again,"
+-Write-Host "DO NOT rerun. Stop/cancel the print normally and send the exact printer error + terminal tail."
++Write-Host '=== M4 X1C GENERIC COLOR-CHANGE ACCEPTANCE V11.2.1 ==='
++Write-Host "Project root              : $Root"
++Write-Host "Job request ID            : $JobRequestId"
++Write-Host "Device evidence request ID: $DeviceEvidenceRequestId"
++Write-Host "Artifact                  : $Artifact"
++Write-Host "AMS mapping               : $AmsMapping"
+ Write-Host ""
+ 
+-$env:PYTHONPATH = (Join-Path $Root 'src') + ';' + $env:PYTHONPATH
+-Set-Location $Root
++$Args = @(
++    $Wrapper,
++    '--artifact',
++    $Artifact,
++    '--ams-mapping',
++    $AmsMapping,
++    '--monitor-seconds',
++    [string]$MonitorSeconds,
++    '--project-root',
++    $Root,
++    '--job-request-id',
++    $JobRequestId,
++    '--device-evidence-request-id',
++    $DeviceEvidenceRequestId
++)
+ 
+-& python $Wrapper `
+-    --artifact $Artifact `
+-    --ams-mapping $Mapping `
+-    --monitor-seconds $MonitorSeconds
++if (-not $ConfirmStart) {
++    Write-Host 'MODE=DRY_RUN'
++    Write-Host 'No Access Code will be requested.'
++    Write-Host 'No FTPS/MQTT connection will be made.'
++    Write-Host 'No print command will be sent.'
++    Write-Host ''
+ 
+-$rc = $LASTEXITCODE
++    $Args += '--preflight-only'
++}
+ 
+-Write-Host ""
+-if ($rc -eq 0) {
+-    Write-Host "M4_X1C_FIRST_COLOR_CHANGE_V1121=PASS" -ForegroundColor Green
+-    Write-Host ""
+-    Write-Host "This means the V11.2 print lifecycle completed successfully."
+-    Write-Host "Report:"
+-    Write-Host "  $(Join-Path $TaskDir 'm4_developer_backend_final_acceptance_v1120.json')"
+-    Write-Host "Events:"
+-    Write-Host "  $(Join-Path $TaskDir 'm4_developer_backend_final_live_events_v1120.jsonl')"
+-} else {
+-    Write-Host "M4_X1C_FIRST_COLOR_CHANGE_V1121=NOT_PASS" -ForegroundColor Red
+-    Write-Host "Python exit code: $rc"
+-    Write-Host ""
+-    Write-Host "Do not automatically rerun."
+-    Write-Host "If the print started, check the printer screen first."
+-    exit $rc
++if ($ConfirmStart) {
++    $studio = Get-Process `
++        -Name 'bambu-studio' `
++        -ErrorAction SilentlyContinue
++
++    if ($studio) {
++        throw 'Bambu Studio is running. Close it before live acceptance.'
++    }
++
++    Write-Host 'MODE=REAL_PRINT'
++    Write-Host 'This run may upload and start a physical print.'
++    Write-Host ''
+ }
++
++& $Py @Args
++
++$rc = $LASTEXITCODE
++
++Write-Host ''
++Write-Host "M4_GENERIC_ACCEPTANCE_EXIT=$rc"
++
++exit $rc
+diff --git a/src/am_model_generator/mesh_validation.py b/src/am_model_generator/mesh_validation.py
+index 5104457..8415644 100644
+--- a/src/am_model_generator/mesh_validation.py
++++ b/src/am_model_generator/mesh_validation.py
+@@ -1094,6 +1094,53 @@ from .model_pipeline_v2 import (
+ def validate_m2_mesh(
+     task_directory: str | Path,
+ ) -> dict[str, Any]:
++    # NORMALIZED_MODEL_ROUTING_V1
++    #
++    # normalized_model.glb has stronger validation semantics
++    # than a raw/repaired mesh:
++    # - exact target-height verification
++    # - normalization provenance
++    # - normalized validation schema
++    #
++    # Route by manifest provenance instead of pretending that
++    # normalized_model.glb is a normal raw mesh.
++    task_path = Path(
++        task_directory
++    ).expanduser().resolve()
++
++    try:
++        manifest_probe = json.loads(
++            (
++                task_path
++                / "m2_manifest.json"
++            ).read_text(
++                encoding="utf-8-sig"
++            )
++        )
++    except (
++        OSError,
++        json.JSONDecodeError,
++    ):
++        manifest_probe = None
++
++    if (
++        isinstance(
++            manifest_probe,
++            dict,
++        )
++        and manifest_probe.get(
++            "primary_model"
++        )
++        == "normalized_model.glb"
++    ):
++        from .normalized_validation import (
++            validate_normalized_m2_mesh,
++        )
++
++        return validate_normalized_m2_mesh(
++            task_path
++        )
++
+     try:
+         return _validate_m2_mesh_impl(
+             task_directory
+diff --git a/src/am_model_generator/normalized_validation.py b/src/am_model_generator/normalized_validation.py
+index f25e473..ceb1567 100644
+--- a/src/am_model_generator/normalized_validation.py
++++ b/src/am_model_generator/normalized_validation.py
+@@ -460,6 +460,20 @@ def _inspect_mesh(
+         extent_values[2]
+     )
+ 
++    # NORMALIZED_VALIDATION_SCALE_FACTOR_V1
++    if (
++        actual_height_mm is None
++        or actual_height_mm <= 0
++    ):
++        scale_factor_to_target_height = None
++    else:
++        scale_factor_to_target_height = (
++            _round_number(
++                target_height_mm
++                / actual_height_mm
++            )
++        )
++
+     if actual_height_mm is None:
+         height_error_mm = None
+         height_error_ratio = None
+@@ -565,6 +579,9 @@ def _inspect_mesh(
+         "actual_height_mm": (
+             actual_height_mm
+         ),
++        "scale_factor_to_target_height": (
++            scale_factor_to_target_height
++        ),
+         "height_error_mm": (
+             height_error_mm
+         ),
+@@ -1055,6 +1072,11 @@ def validate_normalized_m2_mesh(
+         "target_height_mm": (
+             target_height_mm
+         ),
++        "scale_factor_to_target_height": (
++            inspection[
++                "scale_factor_to_target_height"
++            ]
++        ),
+         "actual_height_mm": (
+             inspection[
+                 "actual_height_mm"
+diff --git a/src/am_print_executor/developer_mode_backend_v1120.py b/src/am_print_executor/developer_mode_backend_v1120.py
+index 49f70a1..81fc6a9 100644
+--- a/src/am_print_executor/developer_mode_backend_v1120.py
++++ b/src/am_print_executor/developer_mode_backend_v1120.py
+@@ -16,11 +16,21 @@ import uuid
+ import zipfile
+ from pathlib import Path
+ from typing import Any, Iterable
++from am_print_executor.bambu_profile_resolver import materialize_bambu_cli_profiles
++from am_print_executor.ams_mapping import AmsMappingError, external_spool_wire_mapping, to_x1c_wire_mapping
+ 
+-PROJECT_ROOT = Path(os.environ.get(
+-    "NL_AM_PROJECT_ROOT",
+-    r"E:\nl-am-requirement-parser-M2-source-20260804_152224",
+-))
++def _resolve_project_root() -> Path:
++    """Resolve repository root without a machine-specific hard-coded path."""
++    override = os.environ.get("NL_AM_PROJECT_ROOT")
++    if override:
++        return Path(override).expanduser().resolve()
++
++    # developer_mode_backend_v1120.py
++    #   repo/src/am_print_executor/<this file>
++    return Path(__file__).resolve().parents[2]
++
++
++PROJECT_ROOT = _resolve_project_root()
+ REQUEST_ID = "M2-1E4B2301FADD"
+ EXPECTED_DEVICE_ID = "00M09A3A1700722"
+ TASK_DIR = PROJECT_ROOT / "outputs" / "m4" / REQUEST_ID
+@@ -134,6 +144,116 @@ def inspect_gcode_3mf(path: Path) -> dict[str, Any]:
+     }
+ 
+ 
++def discover_bambu_profiles(studio_exe: Path) -> dict[str, Path]:
++    """Discover official X1C 0.4 mm / 0.20 Standard / PLA profiles.
++
++    Profile selection is derived from the installed Bambu Studio resources,
++    not from a user-specific absolute profile path.
++    """
++    studio_exe = Path(studio_exe).expanduser().resolve()
++
++    profile_root = (
++        studio_exe.parent
++        / "resources"
++        / "profiles"
++        / "BBL"
++    )
++
++    machine = (
++        profile_root
++        / "machine"
++        / "Bambu Lab X1 Carbon 0.4 nozzle.json"
++    )
++
++    process = (
++        profile_root
++        / "process"
++        / "0.20mm Standard @BBL X1C.json"
++    )
++
++    missing = []
++
++    if not machine.is_file():
++        missing.append(str(machine))
++
++    if not process.is_file():
++        missing.append(str(process))
++
++    if missing:
++        raise DeveloperBackendError(
++            "Required Bambu X1C profiles are missing: "
++            + "; ".join(missing)
++        )
++
++    filament_root = profile_root / "filament"
++
++    candidates = []
++
++    if filament_root.is_dir():
++        for path in filament_root.rglob("*.json"):
++            name = path.name.lower()
++
++            if "bambu pla basic" in name:
++                candidates.append(path)
++                continue
++
++            if name in {
++                "generic pla @base.json",
++                "generic pla.json",
++            }:
++                candidates.append(path)
++
++    def filament_rank(path: Path) -> tuple[int, int, str]:
++        name = path.name.lower()
++
++        if name == "bambu pla basic @bbl x1c.json":
++            return (0, len(name), name)
++
++        if (
++            "bambu pla basic" in name
++            and "x1c" in name
++            and "0.2 nozzle" not in name
++        ):
++            return (1, len(name), name)
++
++        if (
++            "bambu pla basic" in name
++            and "@base" in name
++        ):
++            return (2, len(name), name)
++
++        if name == "generic pla @base.json":
++            return (3, len(name), name)
++
++        if name == "generic pla.json":
++            return (4, len(name), name)
++
++        return (50, len(name), name)
++
++    candidates = sorted(
++        {
++            path.resolve()
++            for path in candidates
++            if path.is_file()
++        },
++        key=filament_rank,
++    )
++
++    if not candidates:
++        raise DeveloperBackendError(
++            f"No usable PLA profile found under: {filament_root}"
++        )
++
++    filament = candidates[0]
++
++    return {
++        "profile_root": profile_root.resolve(),
++        "machine": machine.resolve(),
++        "process": process.resolve(),
++        "filament": filament,
++    }
++
++
+ def slice_with_bambu_cli(
+     input_path: Path,
+     output_path: Path,
+@@ -143,53 +263,200 @@ def slice_with_bambu_cli(
+     process_json: Path | None = None,
+     filament_jsons: Iterable[Path] | None = None,
+ ) -> dict[str, Any]:
+-    input_path = input_path.resolve()
+-    output_path = output_path.resolve()
++    """
++    Slice a model through the single authoritative Bambu Studio CLI path.
++
++    Production contract:
++      * bundled BBL profiles are resolved to complete CLI-ready configs;
++      * raw model input is prepared and sliced in one Bambu invocation;
++      * no intermediate project.3mf is used;
++      * no stale-output glob fallback is allowed;
++      * the exact requested output must be created and pass gcode.3mf inspection.
++    """
++
++    input_path = Path(input_path).resolve()
++    output_path = Path(output_path).resolve()
+ 
+     if not input_path.is_file():
+-        raise DeveloperBackendError(f"Slice input missing: {input_path}")
++        raise DeveloperBackendError(
++            f"Slice input missing: {input_path}"
++        )
++
++    studio = (
++        Path(studio_exe).resolve()
++        if studio_exe is not None
++        else discover_bambu_studio()
++    )
+ 
+-    studio = studio_exe.resolve() if studio_exe else discover_bambu_studio()
+-    if studio is None or not studio.is_file():
++    if studio is None or not Path(studio).is_file():
+         raise DeveloperBackendError(
+-            "Bambu Studio CLI executable not found. Set BAMBU_STUDIO_EXE or pass --studio."
++            "Bambu Studio CLI executable not found. "
++            "Set BAMBU_STUDIO_EXE or pass --studio."
+         )
+ 
+-    output_path.parent.mkdir(parents=True, exist_ok=True)
++    studio = Path(studio).resolve()
+ 
+-    cmd = [
+-        str(studio),
++    output_path.parent.mkdir(
++        parents=True,
++        exist_ok=True,
++    )
++
++    fils = [
++        Path(x)
++        for x in (filament_jsons or [])
++    ]
++
++    # Resolve omitted profiles from the installed Bambu Studio bundle.
++    if (
++        machine_json is None
++        or process_json is None
++        or not fils
++    ):
++        auto_profiles = discover_bambu_profiles(
++            studio
++        )
++
++        if machine_json is None:
++            machine_json = auto_profiles["machine"]
++
++        if process_json is None:
++            process_json = auto_profiles["process"]
++
++        if not fils:
++            fils = [
++                auto_profiles["filament"]
++            ]
++
++    # BBL bundled presets commonly use inheritance/include chains.
++    # Materialize complete CLI-ready configs before invoking the slicer.
++    resolved = materialize_bambu_cli_profiles(
++        studio_exe=studio,
++        machine_json=Path(machine_json),
++        process_json=Path(process_json),
++        filament_jsons=[
++            Path(x)
++            for x in fils
++        ],
++        cache_dir=(
++            output_path.parent
++            / ".nl_am_bambu_cli_profiles"
++        ),
++    )
++
++    machine_json = Path(
++        resolved["machine"]
++    ).resolve()
++
++    process_json = Path(
++        resolved["process"]
++    ).resolve()
++
++    fils = [
++        Path(x).resolve()
++        for x in resolved["filaments"]
++    ]
++
++    if not fils:
++        raise DeveloperBackendError(
++            "No resolved filament profile is available."
++        )
++
++    settings_arg = ";".join(
++        (
++            str(machine_json),
++            str(process_json),
++        )
++    )
+ 
+-        # Automatic preparation in Bambu Studio CLI.
+-        # No GUI interaction is required.
+-        "--orient",
+-        "--arrange", "1",
++    filaments_arg = ";".join(
++        str(x)
++        for x in fils
++    )
+ 
+-        "--slice", "0",
+-        "--debug", "2",
+-        "--outputdir", str(output_path.parent),
+-        "--export-3mf", output_path.name,
++    # Exact-output contract: never accept an older neighbouring artifact.
++    try:
++        output_path.unlink()
++    except FileNotFoundError:
++        pass
++
++    cmd: list[str] = [
++        str(studio),
+     ]
+ 
+-    settings = []
+-    if machine_json:
+-        settings.append(str(machine_json.resolve()))
+-    if process_json:
+-        settings.append(str(process_json.resolve()))
+-    if settings:
+-        cmd += ["--load-settings", ";".join(settings)]
++    # Bambu Studio CLI preparation is required for raw model inputs.
++    #
++    # Current Windows Bambu Studio 2.7.x parsing requires a value for
++    # --orient on the target installation, hence "--orient", "1".
++    #
++    # Existing configured 3MF input is not automatically re-oriented.
++    if input_path.suffix.lower() != ".3mf":
++        cmd.extend(
++            [
++                "--orient", "1",
++                "--arrange", "1",
++                "--ensure-on-bed",
++            ]
++        )
++
++    cmd.extend(
++        [
++            "--load-settings",
++            settings_arg,
++
++            "--load-filaments",
++            filaments_arg,
+ 
+-    fils = list(filament_jsons or [])
+-    if fils:
+-        cmd += ["--load-filaments", ";".join(str(x.resolve()) for x in fils)]
++            "--slice",
++            "0",
+ 
+-    cmd.append(str(input_path))
++            "--debug",
++            "5",
++
++            "--export-3mf",
++            str(output_path),
++
++            str(input_path),
++        ]
++    )
+ 
+     creationflags = 0
+-    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+-        creationflags = subprocess.CREATE_NO_WINDOW
++    startupinfo = None
++
++    if os.name == "nt":
++        if hasattr(
++            subprocess,
++            "CREATE_NO_WINDOW",
++        ):
++            creationflags |= (
++                subprocess.CREATE_NO_WINDOW
++            )
++
++        if hasattr(
++            subprocess,
++            "STARTUPINFO",
++        ):
++            startupinfo = (
++                subprocess.STARTUPINFO()
++            )
++
++            if hasattr(
++                subprocess,
++                "STARTF_USESHOWWINDOW",
++            ):
++                startupinfo.dwFlags |= (
++                    subprocess.STARTF_USESHOWWINDOW
++                )
++
++            if hasattr(
++                subprocess,
++                "SW_HIDE",
++            ):
++                startupinfo.wShowWindow = (
++                    subprocess.SW_HIDE
++                )
+ 
+     started = time.time()
++
+     proc = subprocess.run(
+         cmd,
+         cwd=str(output_path.parent),
+@@ -199,34 +466,85 @@ def slice_with_bambu_cli(
+         errors="replace",
+         timeout=1800,
+         creationflags=creationflags,
++        startupinfo=startupinfo,
++    )
++
++    def _tail(
++        value: str | None,
++        limit: int = 3000,
++    ) -> str:
++        if not value:
++            return ""
++        return value[-limit:]
++
++    raw_returncode = int(
++        proc.returncode
+     )
+ 
+-    if proc.returncode != 0:
++    signed_returncode = (
++        raw_returncode - 2**32
++        if raw_returncode >= 2**31
++        else raw_returncode
++    )
++
++    if raw_returncode != 0:
+         raise DeveloperBackendError(
+             "Bambu Studio CLI slicing failed.\n"
+-            f"returncode={proc.returncode}\n"
+-            f"stdout_tail={proc.stdout[-3000:]}\n"
+-            f"stderr_tail={proc.stderr[-3000:]}"
++            f"returncode_raw={raw_returncode}\n"
++            f"returncode_signed={signed_returncode}\n"
++            f"command={cmd!r}\n"
++            f"stdout_tail={_tail(proc.stdout)}\n"
++            f"stderr_tail={_tail(proc.stderr)}"
+         )
+ 
+-    # Some builds may place the file in outputdir using the requested basename.
+     if not output_path.is_file():
+-        alt = output_path.parent / output_path.name
+-        if alt.is_file():
+-            output_path = alt
++        raise DeveloperBackendError(
++            "Bambu Studio reported success but the exact requested "
++            "sliced .gcode.3mf was not created.\n"
++            f"expected={output_path}\n"
++            f"command={cmd!r}\n"
++            f"stdout_tail={_tail(proc.stdout)}\n"
++            f"stderr_tail={_tail(proc.stderr)}"
++        )
++
++    artifact = inspect_gcode_3mf(
++        output_path
++    )
+ 
+-    artifact = inspect_gcode_3mf(output_path)
+     return {
+         "status": "slice_complete",
++        "pipeline": "bambu_single_stage_cli_v1",
+         "studio_exe": str(studio),
+         "command": cmd,
+-        "elapsed_seconds": round(time.time() - started, 3),
++        "elapsed_seconds": round(
++            time.time() - started,
++            3,
++        ),
++        "returncode_raw": raw_returncode,
++        "returncode_signed": signed_returncode,
+         "artifact": artifact,
+-        "stdout_tail": proc.stdout[-2000:],
+-        "stderr_tail": proc.stderr[-2000:],
++        "resolved_machine_json": str(
++            machine_json
++        ),
++        "resolved_process_json": str(
++            process_json
++        ),
++        "resolved_filament_jsons": [
++            str(x)
++            for x in fils
++        ],
++        "stdout_tail": _tail(
++            proc.stdout,
++            2000,
++        ),
++        "stderr_tail": _tail(
++            proc.stderr,
++            2000,
++        ),
+     }
+ 
+ 
++
+ def _retr_remote_bytes(
+     ftp,
+     remote_name: str,
+@@ -253,6 +571,8 @@ def _ftps_upload_verified(
+     access_code: str,
+     *,
+     remote_name: str | None = None,
++    project_root: Path | None = None,
++    identity_request_id: str | None = None,
+ ) -> dict[str, Any]:
+     from am_print_executor import ftps_probe_v32 as ftps
+ 
+@@ -260,7 +580,26 @@ def _ftps_upload_verified(
+         raise DeveloperBackendError("Access Code cannot be empty.")
+ 
+     artifact = inspect_gcode_3mf(artifact_path)
+-    identity = ftps.load_gate1_identity(PROJECT_ROOT, REQUEST_ID)
++    effective_project_root = Path(
++        project_root if project_root is not None else PROJECT_ROOT
++    ).expanduser().resolve()
++
++    effective_identity_request_id = str(
++        identity_request_id if identity_request_id is not None else REQUEST_ID
++    ).strip()
++
++    if not re.fullmatch(
++        r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}",
++        effective_identity_request_id,
++    ):
++        raise DeveloperBackendError(
++            "Invalid device identity request ID."
++        )
++
++    identity = ftps.load_gate1_identity(
++        effective_project_root,
++        effective_identity_request_id,
++    )
+     if identity["device_id"] != EXPECTED_DEVICE_ID:
+         raise DeveloperBackendError("Locked X1C DEVICE_ID mismatch.")
+ 
+@@ -340,6 +679,8 @@ def _ftps_upload_verified(
+             "remote_size_bytes": remote_size,
+             "reused_existing_remote": reused,
+             "gcode_entries": artifact["gcode_entries"],
++            "device_evidence_project_root": str(effective_project_root),
++            "device_evidence_request_id": effective_identity_request_id,
+         }
+     finally:
+         try:
+@@ -465,23 +806,29 @@ def build_project_file_payload(
+         raise DeveloperBackendError("Invalid plate gcode entry.")
+ 
+     if use_ams:
+-        if not ams_mapping:
++        if ams_mapping is None:
+             raise DeveloperBackendError(
+-                "AMS printing requires an explicit --ams-mapping. Slot mapping is never auto-guessed."
++                "AMS printing requires an explicit "
++                "--ams-mapping. Slot mapping is never "
++                "auto-guessed."
+             )
+-        if not all(isinstance(x, int) and -1 <= x <= 255 for x in ams_mapping):
+-            raise DeveloperBackendError("AMS mapping must contain integers between -1 and 255.")
+-        # V11.2.0 X1/P1/A1 raw MQTT mapping rule.
+-        # Keep project filament order; pad unused positions to legacy length 5.
+-        # Emit a real JSON array via json.dumps(payload), NOT a nested JSON string.
+-        if len(ams_mapping) > 5:
+-            raise DeveloperBackendError("X1C AMS mapping cannot exceed 5 project positions.")
+-        mapping_value: Any = list(ams_mapping) + [-1] * (5 - len(ams_mapping))
++
++        try:
++            # The caller supplies logical project-filament
++            # order only. This device layer is the sole place
++            # that generates X1/P1/A1 -1 wire padding.
++            mapping_value: Any = to_x1c_wire_mapping(
++                ams_mapping
++            )
++        except AmsMappingError as exc:
++            raise DeveloperBackendError(
++                str(exc)
++            ) from exc
++
+     else:
+-        # Bambu Studio represents the external spool as
+-        # a virtual tray. For the legacy X1/P1 mapping,
+-        # external-spool project filaments are encoded as -1.
+-        mapping_value = [-1]
++        # External spool is a device-wire concern and is
++        # intentionally represented as the legacy virtual tray.
++        mapping_value = external_spool_wire_mapping()
+ 
+     return {
+         "print": {
+@@ -831,6 +1178,18 @@ def main() -> int:
+     p_print.add_argument("--use-ams", action="store_true")
+     p_print.add_argument("--ams-mapping")
+     p_print.add_argument("--confirm-start", action="store_true")
++    p_print.add_argument(
++        "--project-root",
++        default=str(PROJECT_ROOT),
++    )
++    p_print.add_argument(
++        "--job-request-id",
++        required=True,
++    )
++    p_print.add_argument(
++        "--device-evidence-request-id",
++        default=REQUEST_ID,
++    )
+ 
+     p_full = sub.add_parser("full")
+     p_full.add_argument("input")
+@@ -843,6 +1202,18 @@ def main() -> int:
+     p_full.add_argument("--use-ams", action="store_true")
+     p_full.add_argument("--ams-mapping")
+     p_full.add_argument("--confirm-start", action="store_true")
++    p_full.add_argument(
++        "--project-root",
++        default=str(PROJECT_ROOT),
++    )
++    p_full.add_argument(
++        "--job-request-id",
++        required=True,
++    )
++    p_full.add_argument(
++        "--device-evidence-request-id",
++        default=REQUEST_ID,
++    )
+ 
+     args = parser.parse_args()
+ 
+@@ -868,6 +1239,38 @@ def main() -> int:
+         return 0
+ 
+     if args.command in {"print", "full"}:
++        project_root = Path(
++            args.project_root
++        ).expanduser().resolve()
++
++        job_request_id = str(
++            args.job_request_id
++        ).strip()
++
++        device_evidence_request_id = str(
++            args.device_evidence_request_id
++        ).strip()
++
++        request_id_pattern = (
++            r"[A-Za-z0-9][A-Za-z0-9._-]{2,63}"
++        )
++
++        if not re.fullmatch(
++            request_id_pattern,
++            job_request_id,
++        ):
++            raise DeveloperBackendError(
++                "Invalid --job-request-id."
++            )
++
++        if not re.fullmatch(
++            request_id_pattern,
++            device_evidence_request_id,
++        ):
++            raise DeveloperBackendError(
++                "Invalid --device-evidence-request-id."
++            )
++
+         if not args.confirm_start:
+             raise DeveloperBackendError(
+                 "Real print start is blocked. The caller must explicitly set --confirm-start."
+@@ -894,6 +1297,8 @@ def main() -> int:
+             artifact_path,
+             access_code,
+             remote_name=args.remote_name,
++            project_root=project_root,
++            identity_request_id=device_evidence_request_id,
+         )
+ 
+         start = _mqtt_start_once(
+@@ -909,6 +1314,11 @@ def main() -> int:
+             "version": "10.0.0",
+             "stage": "developer_mode_backend_direct_print",
+             "created_unix": time.time(),
++            "runtime_context": {
++                "project_root": str(project_root),
++                "job_request_id": job_request_id,
++                "device_evidence_request_id": device_evidence_request_id,
++            },
+             "slice": slice_result,
+             "upload": upload,
+             "start": start,
+@@ -917,7 +1327,16 @@ def main() -> int:
+         }
+ 
+         stamp = time.strftime("%Y%m%d_%H%M%S")
+-        report_path = TASK_DIR / f"m4_developer_backend_live_{stamp}.json"
++        report_task_dir = (
++            project_root
++            / "outputs"
++            / "m4"
++            / job_request_id
++        )
++        report_path = (
++            report_task_dir
++            / f"m4_developer_backend_live_{stamp}.json"
++        )
+         _write_json(report_path, result)
+ 
+         print(json.dumps(result, ensure_ascii=False, indent=2))
+diff --git a/src/am_print_executor/developer_mode_final_acceptance_v1120.py b/src/am_print_executor/developer_mode_final_acceptance_v1120.py
+index b3d9e20..ff48eb1 100644
+--- a/src/am_print_executor/developer_mode_final_acceptance_v1120.py
++++ b/src/am_print_executor/developer_mode_final_acceptance_v1120.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ import argparse
+ import getpass
+ import json
++import os
+ import re
+ import ssl
+ import sys
+@@ -11,11 +12,30 @@ import time
+ import zipfile
+ from pathlib import Path
+ from typing import Any
++from am_print_executor.ams_mapping import AmsMappingError, parse_logical_mapping, to_x1c_wire_mapping, validate_logical_mapping
++
++PROJECT_ROOT = Path(
++    os.environ.get(
++        "NL_AM_PROJECT_ROOT",
++        str(Path(__file__).resolve().parents[2]),
++    )
++).expanduser().resolve()
++
++# This ID identifies already-validated X1C device evidence.
++# It is NOT the current model/job request ID.
++REQUEST_ID = os.environ.get(
++    "NL_AM_DEVICE_EVIDENCE_REQUEST_ID",
++    "M2-1E4B2301FADD",
++)
+ 
+-PROJECT_ROOT = Path(r"E:\nl-am-requirement-parser-M2-source-20260804_152224")
+-REQUEST_ID = "M2-1E4B2301FADD"
+ EXPECTED_DEVICE_ID = "00M09A3A1700722"
+-TASK_DIR = PROJECT_ROOT / "outputs" / "m4" / REQUEST_ID
++
++TASK_DIR = (
++    PROJECT_ROOT
++    / "outputs"
++    / "m4"
++    / REQUEST_ID
++)
+ 
+ EVENTS_OUT = TASK_DIR / "m4_developer_backend_final_live_events_v1120.jsonl"
+ REPORT_OUT = TASK_DIR / "m4_developer_backend_final_acceptance_v1120.json"
+@@ -30,9 +50,16 @@ def _load_backend():
+     return backend
+ 
+ 
+-def _load_identity():
++def _load_identity(
++    project_root: Path,
++    device_evidence_request_id: str,
++):
+     from am_print_executor.ftps_probe_v32 import load_gate1_identity
+-    ident = load_gate1_identity(PROJECT_ROOT, REQUEST_ID)
++
++    ident = load_gate1_identity(
++        project_root,
++        device_evidence_request_id,
++    )
+     if ident.get("device_id") != EXPECTED_DEVICE_ID:
+         raise FinalAcceptanceError("Locked DEVICE_ID mismatch.")
+     return ident
+@@ -217,39 +244,98 @@ def _extract_ams_state(obj: Any, prefix: str = "") -> dict[str, Any]:
+ 
+ 
+ def _parse_mapping(text: str) -> list[int]:
+-    vals = [x.strip() for x in text.split(",") if x.strip()]
+-    if not vals:
+-        raise FinalAcceptanceError("AMS mapping cannot be empty.")
+     try:
+-        result = [int(x) for x in vals]
+-    except ValueError as exc:
+-        raise FinalAcceptanceError("AMS mapping must be comma-separated integers.") from exc
+-    if not all(-1 <= x <= 255 for x in result):
+-        raise FinalAcceptanceError("AMS mapping values must be between -1 and 255.")
+-    return result
++        # Final multi-material acceptance uses logical mappings
++        # only. -1 wire padding is forbidden here and physical
++        # slots must be distinct for this acceptance workflow.
++        return parse_logical_mapping(
++            text,
++            require_distinct=True,
++        )
++    except AmsMappingError as exc:
++        raise FinalAcceptanceError(
++            str(exc)
++        ) from exc
+ 
+ 
+-def _write_event(event: dict[str, Any]) -> None:
+-    with EVENTS_OUT.open("a", encoding="utf-8", newline="\n") as f:
++def _write_event(
++    events_out: Path,
++    event: dict[str, Any],
++) -> None:
++    events_out.parent.mkdir(
++        parents=True,
++        exist_ok=True,
++    )
++
++    with events_out.open(
++        "a",
++        encoding="utf-8",
++        newline="\n",
++    ) as f:
+         f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+ 
+ 
+-def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
++def run_live(
++    artifact: Path,
++    mapping: list[int],
++    monitor_seconds: int,
++    *,
++    project_root: Path,
++    job_request_id: str,
++    device_evidence_request_id: str,
++) -> int:
+     import paho.mqtt.client as mqtt
+     from am_print_executor.gate8fc_native_ai_correlation_v880 import correlate
+ 
++    project_root = Path(
++        project_root
++    ).expanduser().resolve()
++
++    task_dir = (
++        project_root
++        / "outputs"
++        / "m4"
++        / job_request_id
++    )
++
++    task_dir.mkdir(
++        parents=True,
++        exist_ok=True,
++    )
++
++    events_out = (
++        task_dir
++        / "m4_developer_backend_final_live_events_v1120.jsonl"
++    )
++
++    report_out = (
++        task_dir
++        / "m4_developer_backend_final_acceptance_v1120.json"
++    )
++
+     backend = _load_backend()
+-    identity = _load_identity()
++
++    identity = _load_identity(
++        project_root,
++        device_evidence_request_id,
++    )
+ 
+     inspect = backend.inspect_gcode_3mf(artifact)
+     mm = _inspect_project_filaments(Path(inspect["path"]))
+ 
+     expected_count = mm.get("project_filament_count")
+-    if isinstance(expected_count, int) and expected_count > 0 and len(mapping) != expected_count:
+-        raise FinalAcceptanceError(
+-            f"AMS mapping length mismatch: project has {expected_count} filament preset(s), "
+-            f"mapping has {len(mapping)} value(s)."
+-        )
++
++    if isinstance(expected_count, int) and expected_count > 0:
++        try:
++            mapping = validate_logical_mapping(
++                mapping,
++                expected_count=expected_count,
++                require_distinct=True,
++            )
++        except AmsMappingError as exc:
++            raise FinalAcceptanceError(
++                str(exc)
++            ) from exc
+ 
+     if not mm.get("multi_material_candidate"):
+         raise FinalAcceptanceError(
+@@ -257,11 +343,22 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
+             "Final AMS acceptance is intentionally blocked."
+         )
+ 
+-    if EVENTS_OUT.exists() or REPORT_OUT.exists():
++    if events_out.exists() or report_out.exists():
+         stamp = time.strftime("%Y%m%d_%H%M%S")
+-        archive = TASK_DIR / "archive" / f"before_v1010_{stamp}"
+-        archive.mkdir(parents=True, exist_ok=True)
+-        for p in (EVENTS_OUT, REPORT_OUT):
++        archive = (
++            task_dir
++            / "archive"
++            / f"before_v1120_{stamp}"
++        )
++        archive.mkdir(
++            parents=True,
++            exist_ok=True,
++        )
++
++        for p in (
++            events_out,
++            report_out,
++        ):
+             if p.exists():
+                 p.replace(archive / p.name)
+         print(f"[ARCHIVE] Previous V10.1 evidence preserved: {archive}")
+@@ -434,7 +531,10 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
+             "raw_print_object": pobj,
+         }
+         raw_events.append(event)
+-        _write_event(event)
++        _write_event(
++            events_out,
++            event,
++        )
+         last_snapshot = snapshot
+ 
+     client = mqtt.Client(
+@@ -499,7 +599,12 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
+ 
+         print("[PASS] Native-AI/status monitor is listening.")
+         print("Uploading audited/sliced artifact via FTPS...")
+-        upload = backend._ftps_upload_verified(Path(inspect["path"]), access_code)
++        upload = backend._ftps_upload_verified(
++            Path(inspect["path"]),
++            access_code,
++            project_root=project_root,
++            identity_request_id=device_evidence_request_id,
++        )
+         print("[PASS] FTPS upload + SHA256 verification complete.")
+ 
+         sequence_id = str(int(time.time() * 1000))
+@@ -585,12 +690,25 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
+         "version": "11.2.0",
+         "created_unix": time.time(),
+         "status": final_status,
+-        "project_root": str(PROJECT_ROOT),
++        "project_root": str(project_root),
++        "job_request_id": job_request_id,
++        "device_evidence_request_id": device_evidence_request_id,
+         "device_id": device_id,
+         "artifact": inspect,
+         "artifact_multi_material_inspection": mm,
+         "ams_mapping_logical": mapping,
+-        "ams_mapping_wire": json.dumps(mapping, separators=(",", ":")),
++
++        # Compatibility string field retained, but now contains
++        # the ACTUAL device-wire mapping rather than a serialized
++        # copy of the logical mapping.
++        "ams_mapping_wire": json.dumps(
++            to_x1c_wire_mapping(mapping),
++            separators=(",", ":"),
++        ),
++
++        # Canonical structured evidence for new consumers.
++        "ams_mapping_wire_array":
++            to_x1c_wire_mapping(mapping),
+         "bambu_studio_gui_used": False,
+         "developer_mode_direct_start": {
+             "mqtt_publish_count": 1,
+@@ -622,7 +740,7 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
+         },
+     }
+ 
+-    REPORT_OUT.write_text(
++    report_out.write_text(
+         json.dumps(report, ensure_ascii=False, indent=2),
+         encoding="utf-8",
+     )
+@@ -634,32 +752,216 @@ def run_live(artifact: Path, mapping: list[int], monitor_seconds: int) -> int:
+     print(f"Native xcam observed: {xcam_seen}")
+     print(f"AMS transition observed: {ams_transition}")
+     print(f"Gate8F-C: {corr.get('overall_interpretation')}")
+-    print(f"Events: {EVENTS_OUT}")
+-    print(f"Report: {REPORT_OUT}")
++    print(f"Events: {events_out}")
++    print(f"Report: {report_out}")
+ 
+     return 0 if final_status == "gui_free_developer_mode_ams_native_ai_validated" else 3
+ 
+ 
++
++def acceptance_preflight(
++    artifact: Path,
++    mapping: list[int],
++    *,
++    project_root: Path,
++    job_request_id: str,
++    device_evidence_request_id: str,
++) -> dict[str, Any]:
++    """
++    Local-only final acceptance preflight.
++
++    Missing/invalid local device evidence is a structured blocker,
++    never an uncaught exception.
++
++    No MQTT.
++    No FTPS.
++    No printer connection.
++    No print command.
++    """
++
++    project_root = Path(
++        project_root
++    ).expanduser().resolve()
++
++    backend = _load_backend()
++
++    artifact_info = backend.inspect_gcode_3mf(
++        Path(artifact)
++    )
++
++    material_info = _inspect_project_filaments(
++        Path(artifact_info["path"])
++    )
++
++    reasons: list[str] = []
++
++    expected_count = material_info.get(
++        "project_filament_count"
++    )
++
++    if not material_info.get(
++        "multi_material_candidate"
++    ):
++        reasons.append(
++            "artifact_is_not_multi_material"
++        )
++
++    if (
++        isinstance(expected_count, int)
++        and expected_count > 0
++        and len(mapping) != expected_count
++    ):
++        reasons.append(
++            "ams_mapping_length_mismatch"
++        )
++
++    identity = None
++    identity_error = None
++
++    try:
++        identity = _load_identity(
++            project_root,
++            device_evidence_request_id,
++        )
++    except Exception as exc:
++        identity_error = (
++            f"{type(exc).__name__}: {exc}"
++        )
++        reasons.append(
++            "device_identity_evidence_missing_or_invalid"
++        )
++
++    passed = not reasons
++
++    return {
++        "status": (
++            "live_acceptance_ready"
++            if passed
++            else "live_acceptance_blocked"
++        ),
++        "passed": passed,
++        "project_root": str(project_root),
++        "job_request_id": job_request_id,
++        "device_evidence_request_id": (
++            device_evidence_request_id
++        ),
++        "device_identity_evidence_valid": (
++            identity is not None
++        ),
++        "device_evidence_error": identity_error,
++        "device_id": (
++            identity.get("device_id")
++            if identity
++            else None
++        ),
++        "printer_ip_from_local_evidence": (
++            identity.get("ip_address")
++            if identity
++            else None
++        ),
++        "artifact": artifact_info,
++        "material_inspection": material_info,
++        "ams_mapping": mapping,
++        "blocking_reasons": reasons,
++        "network_used": False,
++        "printer_command_sent": False,
++        "access_code_requested": False,
++    }
++
++
++
+ def main() -> int:
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--scan", action="store_true")
+     parser.add_argument("--artifact")
+     parser.add_argument("--ams-mapping")
+-    parser.add_argument("--monitor-seconds", type=int, default=1200)
++    parser.add_argument(
++        "--monitor-seconds",
++        type=int,
++        default=1200,
++    )
++
++    parser.add_argument(
++        "--project-root",
++        default=str(PROJECT_ROOT),
++    )
++
++    parser.add_argument(
++        "--job-request-id",
++    )
++
++    parser.add_argument(
++        "--device-evidence-request-id",
++        default=REQUEST_ID,
++    )
++
++    parser.add_argument(
++        "--preflight-only",
++        action="store_true",
++    )
++
+     args = parser.parse_args()
+ 
+     if args.scan:
+         return scan_only()
+ 
+     if not args.artifact:
+-        raise FinalAcceptanceError("--artifact is required for live acceptance.")
++        raise FinalAcceptanceError(
++            "--artifact is required."
++        )
++
+     if not args.ams_mapping:
+-        raise FinalAcceptanceError("--ams-mapping is required for AMS live acceptance.")
++        raise FinalAcceptanceError(
++            "--ams-mapping is required."
++        )
++
++    if not args.job_request_id:
++        raise FinalAcceptanceError(
++            "--job-request-id is required."
++        )
++
++    project_root = Path(
++        args.project_root
++    ).expanduser().resolve()
++
++    mapping = _parse_mapping(
++        args.ams_mapping
++    )
++
++    if args.preflight_only:
++        result = acceptance_preflight(
++            Path(args.artifact),
++            mapping,
++            project_root=project_root,
++            job_request_id=args.job_request_id,
++            device_evidence_request_id=(
++                args.device_evidence_request_id
++            ),
++        )
++
++        print(
++            json.dumps(
++                result,
++                ensure_ascii=False,
++                indent=2,
++            )
++        )
++
++        return (
++            0
++            if result["passed"]
++            else 4
++        )
+ 
+     return run_live(
+         Path(args.artifact),
+-        _parse_mapping(args.ams_mapping),
++        mapping,
+         args.monitor_seconds,
++        project_root=project_root,
++        job_request_id=args.job_request_id,
++        device_evidence_request_id=(
++            args.device_evidence_request_id
++        ),
+     )
+ 
+ 

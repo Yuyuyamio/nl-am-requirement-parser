@@ -1,0 +1,396 @@
+{
+  "status": "pass",
+  "source": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\flat_base_acceptance\\AUTO-20260825-143340-FLATBASE-RESUME\\current_mouse.repaired.bed_centered.flat_base.stl",
+  "source_sha256": "65273e83a11e99add9fc90176af18df91b451586b6f48f93df6affa0e51e5158",
+  "source_unchanged": true,
+  "height_mm": 30.0,
+  "watertight": true,
+  "component_count": 1,
+  "flat_base": {
+    "status": "pass",
+    "base_flatness_passed": true,
+    "blockers": [],
+    "geometry": null,
+    "bed_contact_area_mm2": 1078.2362029114738,
+    "required_contact_area_mm2": 12.246380075323396,
+    "largest_contact_patch_area_mm2": 1078.2362029114738,
+    "contact_patch_count": 1,
+    "dominant_contact_patch_ratio": 1.0,
+    "fitted_base_plane": {
+      "normal": [
+        -0.0,
+        -0.0,
+        1.0
+      ],
+      "offset": -0.0,
+      "z_equals": {
+        "x_coefficient": 0.0,
+        "y_coefficient": 0.0,
+        "intercept": 0.0
+      }
+    },
+    "max_plane_deviation_mm": 0.0,
+    "base_height_range_mm": 0.0,
+    "base_plane_tilt_degrees": 0.0,
+    "stability": {
+      "center_of_mass_xy_mm": [
+        124.6233122573608,
+        124.32180095429261
+      ],
+      "center_of_mass_inside_support_polygon": true,
+      "stability_margin_mm": 13.17420171465151,
+      "required_stability_margin_mm": 0.8999999999999999
+    },
+    "minimum_z_mm": 0.0,
+    "footprint_area_mm2": 1224.6380075323395,
+    "final_extents_mm": [
+      33.11187744140625,
+      36.98485565185547,
+      30.0
+    ],
+    "policy": {
+      "contact_tolerance_mm": 0.001,
+      "maximum_plane_deviation_mm": 0.15,
+      "minimum_contact_area_mm2": 2.0,
+      "minimum_footprint_ratio": 0.01,
+      "minimum_dominant_patch_ratio": 0.8,
+      "maximum_plane_tilt_degrees": 2.0,
+      "minimum_stability_margin_mm": 0.8
+    }
+  },
+  "strict_printability": {
+    "status": "pass",
+    "blockers": [],
+    "artifact": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\verified_delivery_generic\\verified_preparation_kd8jqb89\\final\\final_slice\\candidate.gcode.3mf",
+    "geometry": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\verified_delivery_generic\\verified_preparation_kd8jqb89\\final\\final_slice\\candidate.stl",
+    "gcode_entry": "Metadata/plate_1.gcode",
+    "layer_count": 183,
+    "model_layer_count": 150,
+    "segment_count": 120587,
+    "feature_segment_counts": {
+      "bottom surface": 199,
+      "bridge": 233,
+      "custom": 124,
+      "floating vertical shell": 14513,
+      "gap infill": 1512,
+      "inner wall": 34514,
+      "internal solid infill": 5443,
+      "outer wall": 34398,
+      "overhang wall": 698,
+      "sparse infill": 19883,
+      "support": 5106,
+      "support interface": 3087,
+      "support transition": 539,
+      "top surface": 338
+    },
+    "support_xy_length_mm": 17965.91025342347,
+    "build_plate_contact_area_mm2": 1040.3200000000002,
+    "unsupported_layer_island_count": 0,
+    "unanchored_support_component_count": 0,
+    "total_bad_area_mm2": 0.0,
+    "worst_bad_area_mm2": 0.0,
+    "longest_bad_bridge_mm": 0.0,
+    "continuous_bridge_anchor_rescue_count": 0,
+    "continuous_bridge_free_span_rescue_count": 0,
+    "dangerous_layer_count": 0,
+    "dangerous_layers": [],
+    "mesh_topology": {
+      "status": "pass",
+      "blockers": [],
+      "geometry": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\verified_delivery_generic\\verified_preparation_kd8jqb89\\final\\final_slice\\candidate.stl",
+      "face_count": 5436,
+      "component_count": 1,
+      "floating_component_count": 0,
+      "watertight": true,
+      "bounds_mm": [
+        [
+          111.44352722167969,
+          109.5068588256836,
+          0.0
+        ],
+        [
+          144.55540466308594,
+          146.49171447753906,
+          30.0
+        ]
+      ],
+      "build_plate_contact_area_mm2": 1078.2362029114738,
+      "components": [
+        {
+          "index": 0,
+          "face_count": 5436,
+          "minimum_z_mm": 0.0,
+          "maximum_z_mm": 30.0,
+          "watertight": true,
+          "floating": false
+        }
+      ],
+      "policy": {
+        "build_plate_tolerance_mm": 0.25,
+        "minimum_build_plate_contact_mm2": 2.0
+      }
+    },
+    "policy": {
+      "gate_semantics": "layer_support_connectivity_v2",
+      "cell_mm": 0.4,
+      "line_width_mm": 0.42,
+      "configured_layer_height_mm": 0.2,
+      "measured_layer_height_mm": 0.1999999999999993,
+      "self_support_xy_mm": 0.273,
+      "support_growth_xy_mm": 0.63,
+      "support_top_z_distance_mm": 0.2,
+      "support_bottom_z_distance_mm": 0.2,
+      "maximum_support_vertical_gap_mm": 0.4999999999999991,
+      "support_contact_xy_mm": 0.5599999999999999,
+      "maximum_safe_bridge_span_mm": 8.0,
+      "minimum_build_plate_contact_mm2": 2.0,
+      "unsupported_component_area_exemption_mm2": 0.0,
+      "legacy_minimum_bad_component_mm2_ignored": 1.0
+    },
+    "next_module": "M4",
+    "resolution": "physical_printability_verified"
+  },
+  "actual_auto_orient": {
+    "path": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\verified_delivery_generic\\verified_preparation_kd8jqb89\\final\\auto_oriented.3mf",
+    "sha256": "fe38533fb8cb8c625877a6964b4a702f790bda72cf9c25f9ca8347b79c74ed29",
+    "size_bytes": 150729,
+    "object_count": 1,
+    "part_count": 1,
+    "model_instance_count": 1,
+    "build_item_count": 1,
+    "part_matrices": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "flat_base_after_orientation": {
+      "status": "pass",
+      "base_flatness_passed": true,
+      "blockers": [],
+      "geometry": null,
+      "bed_contact_area_mm2": 1078.2363743277015,
+      "required_contact_area_mm2": 12.246380385529124,
+      "largest_contact_patch_area_mm2": 1078.2363743277015,
+      "contact_patch_count": 1,
+      "dominant_contact_patch_ratio": 1.0,
+      "fitted_base_plane": {
+        "normal": [
+          -0.0,
+          -0.0,
+          1.0
+        ],
+        "offset": -0.0,
+        "z_equals": {
+          "x_coefficient": 0.0,
+          "y_coefficient": 0.0,
+          "intercept": 0.0
+        }
+      },
+      "max_plane_deviation_mm": 0.0,
+      "base_height_range_mm": 0.0,
+      "base_plane_tilt_degrees": 0.0,
+      "stability": {
+        "center_of_mass_xy_mm": [
+          124.62331260307997,
+          124.32180127671296
+        ],
+        "center_of_mass_inside_support_polygon": true,
+        "stability_margin_mm": 13.174202614030825,
+        "required_stability_margin_mm": 0.8999999999999999
+      },
+      "minimum_z_mm": 0.0,
+      "footprint_area_mm2": 1224.6380385529123,
+      "final_extents_mm": [
+        33.11187522564032,
+        36.984859063633124,
+        30.0
+      ],
+      "policy": {
+        "contact_tolerance_mm": 0.001,
+        "maximum_plane_deviation_mm": 0.15,
+        "minimum_contact_area_mm2": 2.0,
+        "minimum_footprint_ratio": 0.01,
+        "minimum_dominant_patch_ratio": 0.8,
+        "maximum_plane_tilt_degrees": 2.0,
+        "minimum_stability_margin_mm": 0.8
+      }
+    },
+    "geometry_bounds_mm": [
+      [
+        111.44352842506459,
+        109.5068570138226,
+        0.0
+      ],
+      [
+        144.5554036507049,
+        146.49171607745572,
+        30.0
+      ]
+    ]
+  },
+  "slice_geometry_alignment": {
+    "status": "pass",
+    "maximum_vertex_distance_mm": 1.0208758610501761e-05,
+    "tolerance_mm": 0.001
+  },
+  "before_orientation_status": "pass",
+  "after_orientation_status": "pass",
+  "profile": {
+    "printer_model": "Bambu Lab X1 Carbon",
+    "printer_variant": "0.4",
+    "nozzle_diameter": [
+      "0.4"
+    ],
+    "filament_type": [
+      "PLA"
+    ],
+    "layer_height": "0.2",
+    "enable_support": "1",
+    "support_type": "normal(auto)",
+    "support_threshold_angle": "30",
+    "sparse_infill_density": "100%",
+    "sparse_infill_pattern": "zig-zag"
+  },
+  "files_sha256": {
+    "mouse_30mm.stl": "a25339f88017d2924551928b2d71f92d4691252378a94345a03344d18bd69237",
+    "mouse_30mm.3mf": "fe38533fb8cb8c625877a6964b4a702f790bda72cf9c25f9ca8347b79c74ed29",
+    "mouse_30mm.gcode.3mf": "840af664f2b2c45ddca9e279b8931dbec23cdbcc3667ceac23aea82469751aa1",
+    "model_preview.png": "b83d60cc0bd54fed6b543820081426b0f5c88dd47f08e09ea3acd2454d310e01"
+  },
+  "regressions": {
+    "tests": 110,
+    "passed": true,
+    "suites": [
+      {
+        "pattern": "test_flat_base_gate.py",
+        "tests": 8,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m4_bambu_auto_orient.py",
+        "tests": 6,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_verified_print_preparation.py",
+        "tests": 8,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_general_printability_geometry_repair*.py",
+        "tests": 10,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_geometry_fidelity_gate.py",
+        "tests": 14,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_local_self_support_envelope.py",
+        "tests": 3,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_printability_blocker_clustering.py",
+        "tests": 5,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_printability_support_enforcer.py",
+        "tests": 2,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_fdm_layer_printability_gate.py",
+        "tests": 12,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_variable_layer_height_printability.py",
+        "tests": 2,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_normalization.py",
+        "tests": 4,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_normalized_validation.py",
+        "tests": 4,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_fdm_prompt_contract*.py",
+        "tests": 6,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_m2_providers.py",
+        "tests": 7,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_automatic_print_workflow.py",
+        "tests": 16,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      },
+      {
+        "pattern": "test_gcode_motion_state_parser.py",
+        "tests": 3,
+        "passed": true,
+        "failures": [],
+        "errors": []
+      }
+    ]
+  },
+  "physical_print_performed": false,
+  "printer_contacted": false,
+  "preparation_directory": "C:\\Users\\PC\\Documents\\GitHub\\nl-am-requirement-parser\\outputs\\verified_delivery_generic\\verified_preparation_kd8jqb89"
+}

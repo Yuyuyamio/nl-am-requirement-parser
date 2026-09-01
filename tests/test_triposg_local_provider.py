@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import math
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
+
+import trimesh
+import numpy as np
+from am_model_generator.coordinate_frame import load_print_scene
 
 from am_model_generator.contracts import M2ProviderError
 from am_model_generator.providers.base import CreativeGenerationRequest
@@ -36,7 +41,7 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             source_payload_sha256="a" * 64,
             prompt="a cute sitting cartoon dog",
             negative_prompt=None,
-            target_height_mm=100.0,
+            target_height_mm=60.0,
             metadata={},
         )
 
@@ -92,10 +97,25 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             )
 
         if environment_name == "triposg":
+            normalized_mesh = (
+                trimesh.creation.box(
+                    extents=(
+                        1.403456,
+                        1.819824,
+                        1.874882,
+                    )
+                )
+            )
             (
                 job_directory
                 / "generated_model.glb"
-            ).write_bytes(b"fake-glb")
+            ).write_bytes(
+                trimesh.exchange.gltf.export_glb(
+                    trimesh.Scene(
+                        normalized_mesh
+                    )
+                )
+            )
             return self._worker_result(
                 {
                     "status": "completed",
@@ -113,7 +133,7 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             f"unexpected environment: {environment_name}"
         )
 
-    def test_submit_runs_both_workers_and_completes(
+    def test_submit_rescales_normalized_mesh_and_completes(
         self,
     ) -> None:
         self.bridge.run_json_worker.side_effect = (
@@ -165,6 +185,66 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             ]
         )
 
+        raw_mesh = trimesh.load_mesh(
+            submission.provider_metadata[
+                "raw_generated_model_path"
+            ],
+            process=False,
+        )
+        physical_mesh = trimesh.load_mesh(
+            submission.provider_metadata[
+                "generated_model_path"
+            ],
+            process=False,
+        )
+        raw_extents = [
+            float(value)
+            for value in raw_mesh.extents
+        ]
+        physical_extents = [
+            float(value)
+            for value in physical_mesh.extents
+        ]
+
+        self.assertTrue(
+            math.isclose(
+                raw_extents[2],
+                1.874882,
+                abs_tol=1e-6,
+            )
+        )
+        self.assertTrue(
+            math.isclose(
+                physical_extents[1],
+                60.0,
+                abs_tol=0.1,
+            )
+        )
+        self.assertGreater(
+            min(physical_extents),
+            10.0,
+        )
+        self.assertTrue(
+            math.isclose(
+                physical_extents[0]
+                / physical_extents[2],
+                raw_extents[0]
+                / raw_extents[2],
+                rel_tol=1e-6,
+                abs_tol=1e-6,
+            )
+        )
+        self.assertTrue(
+            math.isclose(
+                physical_extents[1]
+                / physical_extents[2],
+                raw_extents[1]
+                / raw_extents[2],
+                rel_tol=1e-6,
+                abs_tol=1e-6,
+            )
+        )
+
     def test_second_submit_reuses_in_memory_submission(
         self,
     ) -> None:
@@ -192,6 +272,25 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             2,
         )
 
+    def test_nonwatertight_generated_mesh_is_delivered_for_later_repair(self):
+        def worker(**kwargs):
+            result = self._worker_side_effect(**kwargs)
+            if kwargs["environment_name"] == "triposg":
+                path = next(self.cache_root.glob("triposg-local-*/generated_model.glb"))
+                mesh = trimesh.creation.icosphere(subdivisions=2)
+                mesh.update_faces(np.arange(len(mesh.faces) - 1))
+                path.write_bytes(trimesh.exchange.gltf.export_glb(trimesh.Scene(mesh)))
+            return result
+        self.bridge.run_json_worker.side_effect = worker
+        submission = self.provider.submit(self.request)
+        physical = load_print_scene(Path(submission.provider_metadata["generated_model_path"])).to_mesh()
+        self.assertEqual(submission.status, "completed")
+        self.assertAlmostEqual(physical.extents[2], 60, places=4)
+        self.assertFalse(physical.is_watertight)
+        report = submission.provider_metadata["target_size_postprocess"]
+        self.assertTrue(report["mesh_validation_required"])
+        self.assertFalse(report["printability_verified"])
+
     def test_download_artifact_copies_cached_glb(
         self,
     ) -> None:
@@ -213,9 +312,18 @@ class TripoSGLocalProviderTests(unittest.TestCase):
             destination,
         )
 
-        self.assertEqual(
-            destination.read_bytes(),
-            b"fake-glb",
+        downloaded_mesh = trimesh.load_mesh(
+            destination,
+            process=False,
+        )
+        self.assertTrue(
+            math.isclose(
+                float(
+                    downloaded_mesh.extents[1]
+                ),
+                60.0,
+                abs_tol=0.1,
+            )
         )
         self.assertFalse(
             metadata["network_called"]

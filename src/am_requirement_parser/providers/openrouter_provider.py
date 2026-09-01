@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -113,11 +113,27 @@ class OpenRouterProvider:
             or "openrouter/free"
         )
 
+        try:
+            request_timeout_seconds = float(
+                os.getenv("OPENROUTER_TIMEOUT_SECONDS", "45")
+            )
+        except ValueError:
+            request_timeout_seconds = 45.0
+
+        try:
+            max_retries = int(
+                os.getenv("OPENROUTER_MAX_RETRIES", "2")
+            )
+        except ValueError:
+            max_retries = 2
+
         self.client = OpenAI(
             base_url=(
                 "https://openrouter.ai/api/v1"
             ),
             api_key=api_key,
+            timeout=request_timeout_seconds,
+            max_retries=max_retries,
             default_headers={
                 "X-OpenRouter-Title": (
                     "NL AM Requirement Parser"

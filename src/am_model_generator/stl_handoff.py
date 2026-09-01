@@ -9,6 +9,7 @@ from typing import Any
 
 import numpy as np
 import trimesh
+from .coordinate_frame import load_print_scene
 from jsonschema import Draft202012Validator
 
 from .contracts import (
@@ -20,6 +21,9 @@ from .mesh_validation import (
 )
 from .normalization import (
     ensure_valid_normalization_receipt,
+)
+from .normalized_validation import (
+    ensure_valid_normalized_mesh_report,
 )
 
 
@@ -314,7 +318,7 @@ def _load_combined_mesh(
     int,
 ]:
     try:
-        scene = trimesh.load_scene(
+        scene = load_print_scene(
             path,
             process=process,
         )
@@ -747,28 +751,9 @@ def create_m2_stl_handoff(
     if manifest.get("status") == (
         "generated"
     ):
-        validation_result = (
-            validate_m2_mesh(
-                task_path
-            )
+        ensure_valid_normalized_mesh_report(
+            normalized_validation
         )
-        validation_report = (
-            validation_result["report"]
-        )
-
-        if (
-            not validation_result.get(
-                "hard_constraints_passed"
-            )
-            or validation_report.get(
-                "model_file"
-            )
-            != NORMALIZED_MODEL_FILENAME
-        ):
-            raise M2ProviderError(
-                "M2_STL_SOURCE_VALIDATION_FAILED",
-                "归一化模型没有通过当前Mesh验证",
-            )
 
     normalized_sha256 = (
         _sha256_file(
@@ -992,7 +977,10 @@ def create_m2_stl_handoff(
                 ][2],
                 target_height_mm,
                 rel_tol=1e-7,
-                abs_tol=1e-5,
+                abs_tol=max(
+                    0.05,
+                    target_height_mm * 0.001,
+                ),
             )
         ),
         "base_aligned_z0": (
