@@ -767,7 +767,6 @@ def _ftps_upload_verified(
             "remote_dir": DEFAULT_REMOTE_DIR,
             "remote_name": remote_name,
             "remote_path": f"{DEFAULT_REMOTE_DIR}/{remote_name}",
-            "local_path": str(artifact_path.resolve()),
             "local_sha256": artifact["sha256"],
             "remote_sha256": remote_sha,
             "remote_size_bytes": remote_size,
@@ -887,119 +886,6 @@ def _strict_idle_check(print_obj: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-
-def _external_spool_material_from_gcode_3mf(path: Path) -> dict[str, Any]:
-    # Read material metadata embedded by Bambu Studio in the sliced 3MF.
-    path = Path(path).resolve()
-    if not path.is_file():
-        raise DeveloperBackendError(
-            f"External-spool material source artifact missing: {path}"
-        )
-    if not zipfile.is_zipfile(path):
-        raise DeveloperBackendError(
-            f"External-spool material source is not a valid 3MF ZIP: {path}"
-        )
-
-    with zipfile.ZipFile(path, "r") as zf:
-        try:
-            raw = zf.read("Metadata/project_settings.config")
-        except KeyError as exc:
-            raise DeveloperBackendError(
-                "3MF is missing Metadata/project_settings.config."
-            ) from exc
-
-    try:
-        cfg = json.loads(raw.decode("utf-8-sig"))
-    except Exception as exc:
-        raise DeveloperBackendError(
-            "Cannot parse Metadata/project_settings.config for "
-            "external-spool material metadata."
-        ) from exc
-
-    def first_value(key: str, default: Any) -> Any:
-        value = cfg.get(key, default)
-        if isinstance(value, list):
-            return value[0] if value else default
-        return value
-
-    filament_ids = cfg.get("filament_ids", ["GFA00"])
-    if isinstance(filament_ids, list) and len(filament_ids) != 1:
-        raise DeveloperBackendError(
-            "External-spool direct start currently requires exactly one "
-            "filament in the sliced 3MF."
-        )
-
-    filament_id = str(first_value("filament_ids", "GFA00") or "GFA00")
-    filament_type = str(first_value("filament_type", "PLA") or "PLA")
-
-    setting_id = str(
-        first_value(
-            "filament_settings_id",
-            "Bambu PLA Basic @BBL X1C",
-        )
-        or ""
-    )
-
-    colour = str(
-        first_value(
-            "filament_colour",
-            first_value("filament_color", "FFFFFFFF"),
-        )
-        or "FFFFFFFF"
-    ).strip()
-
-    colour = colour.lstrip("#")
-    if len(colour) == 6:
-        colour += "FF"
-    if len(colour) != 8:
-        colour = "FFFFFFFF"
-    colour = colour.upper()
-
-    def int_value(key: str, default: int) -> int:
-        value = first_value(key, default)
-        try:
-            return int(float(value))
-        except (TypeError, ValueError):
-            return default
-
-    nozzle_temp_min = int_value("nozzle_temperature_range_low", 190)
-    nozzle_temp_max = int_value("nozzle_temperature_range_high", 240)
-
-    return {
-        "filament_id": filament_id,
-        "setting_id": setting_id,
-        "tray_color": colour,
-        "tray_type": filament_type,
-        "nozzle_temp_min": nozzle_temp_min,
-        "nozzle_temp_max": nozzle_temp_max,
-    }
-
-
-def build_external_spool_setting_payload(
-    *,
-    sequence_id: str,
-    material: Mapping[str, Any],
-) -> dict[str, Any]:
-    # X1C external spool: virtual AMS 255, slot 0.
-    # Bambu Studio's ams_filament_setting builder uses tray_id 254
-    # for virtual trays.
-    return {
-        "print": {
-            "sequence_id": str(sequence_id),
-            "command": "ams_filament_setting",
-            "ams_id": 255,
-            "slot_id": 0,
-            "tray_id": 254,
-            "tray_info_idx": str(material["filament_id"]),
-            "setting_id": str(material.get("setting_id", "")),
-            "tray_color": str(material["tray_color"]),
-            "nozzle_temp_min": int(material["nozzle_temp_min"]),
-            "nozzle_temp_max": int(material["nozzle_temp_max"]),
-            "tray_type": str(material["tray_type"]),
-        }
-    }
-
-
 def build_project_file_payload(
     *,
     remote_path: str,
@@ -1008,15 +894,10 @@ def build_project_file_payload(
     use_ams: bool,
     ams_mapping: list[int] | None,
 ) -> dict[str, Any]:
-    normalized_remote_path = "/" + remote_path.lstrip("/")
-    remote_path = normalized_remote_path
-
     if not remote_path.startswith("/"):
         raise DeveloperBackendError("Remote print path must be under /cache.")
     if not re.fullmatch(r"Metadata/plate_\d+\.gcode", gcode_entry):
         raise DeveloperBackendError("Invalid plate gcode entry.")
-
-    mapping2_value = None
 
     if use_ams:
         if ams_mapping is None:
@@ -1043,14 +924,6 @@ def build_project_file_payload(
         # intentionally represented as the legacy virtual tray.
         mapping_value = external_spool_wire_mapping()
 
-        # X1C single-nozzle external-spool virtual tray.
-        mapping2_value = [
-            {
-                "ams_id": 255,
-                "slot_id": 0,
-            }
-        ]
-
     return {
         "print": {
             "sequence_id": sequence_id,
@@ -1061,26 +934,17 @@ def build_project_file_payload(
             "task_id": "0",
             "subtask_id": "0",
             "subtask_name": Path(remote_path).name,
-            "file": remote_path,
+            "file": "",
             "url": f"ftp://{remote_path}",
             "md5": "",
             "timelapse": False,
             "bed_type": "auto",
-            "bed_leveling": True,
             "bed_levelling": True,
             "flow_cali": True,
             "vibration_cali": True,
             "layer_inspect": True,
             "ams_mapping": mapping_value,
             "use_ams": bool(use_ams),
-            **(
-                {
-                    "ams_mapping2": mapping2_value,
-                    "ams_mapping_2": mapping2_value,
-                }
-                if mapping2_value is not None
-                else {}
-            ),
         }
     }
 
@@ -1224,38 +1088,6 @@ def _mqtt_start_once(
         if callback_errors:
             raise DeveloperBackendError(callback_errors[-1])
 
-        external_spool_setting_payload = None
-        external_spool_material = None
-        if not use_ams:
-            local_path = upload.get("local_path")
-            if not local_path:
-                raise DeveloperBackendError(
-                    "Upload result is missing local_path required for "
-                    "external-spool material setup."
-                )
-            external_spool_material = (
-                _external_spool_material_from_gcode_3mf(Path(local_path))
-            )
-            spool_sequence_id = str(int(time.time() * 1000))
-            external_spool_setting_payload = (
-                build_external_spool_setting_payload(
-                    sequence_id=spool_sequence_id,
-                    material=external_spool_material,
-                )
-            )
-            spool_info = client.publish(
-                f"device/{device_id}/request",
-                payload=json.dumps(
-                    external_spool_setting_payload,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                ),
-                qos=0,
-                retain=False,
-            )
-            spool_info.wait_for_publish(timeout=5.0)
-            time.sleep(0.75)
-
         info = client.publish(
             f"device/{device_id}/request",
             payload=json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
@@ -1303,8 +1135,6 @@ def _mqtt_start_once(
         "use_ams": use_ams,
         "ams_mapping": ams_mapping if use_ams else None,
         "payload": payload,
-        "external_spool_material": external_spool_material,
-        "external_spool_setting_payload": external_spool_setting_payload,
         "automatic_retry_publish_count": 0,
     }
 

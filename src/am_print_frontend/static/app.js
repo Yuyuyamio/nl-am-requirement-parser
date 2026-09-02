@@ -49,6 +49,7 @@ const EVENT_TEXT = {
   stage_completed: "步骤完成",
   stage_skipped: "无需执行，已跳过",
   stage_reused: "复用已完成结果",
+  reprint_source_reused: "复用步骤 1 文件",
   preparation_revision_recovery: "复用原模型，应用新版修复",
   provider_status: "模型服务状态更新",
   stage_failed: "步骤执行失败",
@@ -66,12 +67,23 @@ const elements = {
   taskTitle: $("#taskTitle"), requestText: $("#requestText"), statusDot: $("#statusDot"),
   statusTitle: $("#statusTitle"), stageSummary: $("#stageSummary"), elapsed: $("#elapsed"),
   progressValue: $("#progressValue"), progressBar: $("#progressBar"), timeline: $("#timeline"),
+  printProgressCard: $("#printProgressCard"), printProgressCaption: $("#printProgressCaption"),
+  printProgressValue: $("#printProgressValue"), printProgressBar: $("#printProgressBar"),
+  printStateDot: $("#printStateDot"), printStateText: $("#printStateText"),
+  printRemainingText: $("#printRemainingText"), printMonitorAlert: $("#printMonitorAlert"),
+  printMonitorAlertMessage: $("#printMonitorAlertMessage"),
+  printMonitorAlertLayer: $("#printMonitorAlertLayer"),
+  reprintPanel: $("#reprintPanel"), reprintButton: $("#reprintButton"),
+  reprintHint: $("#reprintHint"),
   eventLog: $("#eventLog"), eventCount: $("#eventCount"), controlHint: $("#controlHint"),
   pauseButton: $("#pauseButton"), stopButton: $("#stopButton"), retryButton: $("#retryButton"),
   errorCard: $("#errorCard"), errorTitle: $("#errorTitle"), errorMessage: $("#errorMessage"),
   clarificationCard: $("#clarificationCard"), clarificationQuestion: $("#clarificationQuestion"),
   promptInput: $("#promptInput"), composerForm: $("#composerForm"), sendButton: $("#sendButton"),
-  voiceButton: $("#voiceButton"), voicePanel: $("#voicePanel"), voiceStatus: $("#voiceStatus"),
+  voiceButton: $("#voiceButton"), voicePanel: $("#voicePanel"), voiceTitle: $("#voiceTitle"),
+  voiceStatus: $("#voiceStatus"), voiceWave: $("#voiceWave"),
+  microphoneSelect: $("#microphoneSelect"), retryMicrophone: $("#retryMicrophone"),
+  voiceFileAction: $("#voiceFileAction"), voiceFileInput: $("#voiceFileInput"),
   autoPrintToggle: $("#autoPrintToggle"), detailsButton: $("#detailsButton"),
   detailsDialog: $("#detailsDialog"), detailsJobId: $("#detailsJobId"), detailsList: $("#detailsList"),
   stopDialog: $("#stopDialog"), toast: $("#toast"), sidebar: $("#sidebar"),
@@ -84,6 +96,9 @@ const elements = {
   printerSuccessDevice: $("#printerSuccessDevice"), printerSuccessTransport: $("#printerSuccessTransport"),
   deleteDialog: $("#deleteDialog"), deleteDialogText: $("#deleteDialogText"),
   cancelDelete: $("#cancelDelete"), confirmDelete: $("#confirmDelete"),
+  printConfirmDialog: $("#printConfirmDialog"), printConfirmTitle: $("#printConfirmTitle"),
+  printConfirmMessage: $("#printConfirmMessage"), cancelPrintConfirm: $("#cancelPrintConfirm"),
+  confirmPrintDispatch: $("#confirmPrintDispatch"),
   deliveryCard: $("#deliveryCard"), deliveryMessage: $("#deliveryMessage"), deliveryLinks: $("#deliveryLinks"),
   modelPreview: $("#modelPreview"), previewHint: $("#previewHint"), printButton: $("#printButton"),
   previewControls: $("#previewControls"), previewLegend: $("#previewLegend"),
@@ -101,7 +116,9 @@ let audioChunks = [];
 let recordingTimer = null;
 let voiceState = "idle";
 let speechAvailable = false;
+let printConfirmationResolve = null;
 let browserRecordingAvailable = false;
+let audioInputDevices = [];
 let pendingDeleteConversation = null;
 
 async function api(path, options = {}) {
@@ -337,7 +354,16 @@ function statusPresentation(snapshot) {
     ? ["旧任务可以直接重切", "可以复用现有模型交给新版 Bambu 流程重新切片，不再执行旧版检查。"]
     : ["这是旧版任务状态", "请新建一次任务；新版在 Bambu Studio 切片成功后会直接放行。"];
   if (snapshot.status === "printability_blocked") return ["这是旧版任务状态", "新版已取消切片后检查；请重新运行任务以直接采用 Bambu Studio 的切片结果。"];
-  if (snapshot.status === "print_started") return ["打印任务已发送", "打印机已经接收任务，请留意首层打印状态。"];
+  if (snapshot.status === "print_started") {
+    const monitor = snapshot.print_monitor || {};
+    const percent = Number.isFinite(Number(monitor.percent)) ? `${Number(monitor.percent).toFixed(1).replace(".0", "")}%` : "";
+    if (monitor.status === "error") return ["打印需要处理", monitor.alert?.message || "打印机报告异常，请立即检查设备。"];
+    if (monitor.status === "completed") return ["实体打印已完成", "打印监控已收到正常结束状态。"];
+    if (monitor.status === "paused") return ["实体打印已暂停", `${percent ? `当前完成 ${percent}。` : ""}请在打印机或官方设备控制中处理。`];
+    if (monitor.status === "printing") return ["正在实体打印", `${percent ? `当前完成 ${percent}。` : ""}逐层状态正在后台监控。`];
+    if (monitor.status === "unavailable") return ["打印任务已发送", "暂时没有收到新的打印机状态，请检查本地连接。"];
+    return ["正在连接打印监控", "打印任务已经发送，正在等待打印机进度状态。"];
+  }
   if (snapshot.status === "stopped") return ["任务已完全停止", "没有继续执行后续软件步骤；已完成的安全结果仍然保留。"];
   if (snapshot.status === "awaiting_clarification") return ["还需要一点信息", "补充完整需求后，可以重新开始自动制作。"];
   if (["failed", "credentials_required", "manual_reconciliation_required", "print_rejected"].includes(snapshot.status)) {
@@ -399,6 +425,87 @@ function renderEvents(events) {
   elements.eventLog.replaceChildren(fragment);
 }
 
+const PRINT_MONITOR_TEXT = {
+  waiting: ["等待打印", "生成完成后自动开始监控"],
+  connecting: ["正在连接监控", "等待打印机返回实时状态"],
+  printing: ["正在打印", "逐层状态已折叠为总体进度"],
+  paused: ["打印已暂停", "请在打印机或官方设备控制中处理"],
+  completed: ["打印已完成", "监控已收到正常结束状态"],
+  error: ["打印异常", "请立即检查打印机"],
+  unavailable: ["监控暂时不可用", "打印任务可能仍在设备上运行"],
+};
+
+function formatRemainingMinutes(value) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 0) return "";
+  if (minutes < 1) return "预计不到 1 分钟";
+  if (minutes < 60) return `预计剩余 ${Math.round(minutes)} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = Math.round(minutes % 60);
+  return `预计剩余 ${hours} 小时${rest ? ` ${rest} 分钟` : ""}`;
+}
+
+function renderReprint(snapshot) {
+  const reprint = snapshot.reprint || {};
+  const visible = Boolean(reprint.visible);
+  const available = visible && Boolean(reprint.available);
+  elements.reprintPanel.classList.toggle("hidden", !visible);
+  elements.reprintPanel.classList.toggle("ready", available);
+  elements.reprintButton.disabled = !available;
+  elements.reprintHint.textContent = reprint.message
+    || "原任务结束且打印机安全空闲后开放。";
+}
+
+function renderPrintMonitor(snapshot) {
+  const shouldShow = Boolean(snapshot.start_print_requested || snapshot.status === "print_started");
+  elements.printProgressCard.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) return;
+
+  const monitor = snapshot.print_monitor || {};
+  const status = String(monitor.status || "waiting");
+  const labels = PRINT_MONITOR_TEXT[status] || PRINT_MONITOR_TEXT.waiting;
+  const numericPercent = Number(monitor.percent);
+  const percent = Number.isFinite(numericPercent) ? Math.max(0, Math.min(100, numericPercent)) : 0;
+  const percentLabel = Number.isInteger(percent) ? String(percent) : percent.toFixed(1);
+  elements.printProgressValue.textContent = `${percentLabel}%`;
+  elements.printProgressBar.style.width = `${percent}%`;
+  elements.printProgressBar.classList.toggle("is-running", status === "printing");
+  elements.printProgressBar.parentElement.setAttribute("role", "progressbar");
+  elements.printProgressBar.parentElement.setAttribute("aria-valuemin", "0");
+  elements.printProgressBar.parentElement.setAttribute("aria-valuemax", "100");
+  elements.printProgressBar.parentElement.setAttribute("aria-valuenow", percentLabel);
+  elements.printProgressCard.dataset.status = status;
+  elements.printStateText.textContent = labels[0];
+  elements.printStateDot.className = `print-state-dot ${status}`;
+  elements.printProgressCaption.textContent = snapshot.status === "print_started"
+    ? "实时读取打印机总体进度"
+    : "等待打印任务生成完成";
+  elements.printRemainingText.textContent = formatRemainingMinutes(monitor.remaining_minutes)
+    || monitor.message
+    || labels[1];
+  renderReprint(snapshot);
+
+  const alert = monitor.alert;
+  const showAlert = status === "error" || Boolean(monitor.has_alert);
+  elements.printMonitorAlert.classList.toggle("hidden", !showAlert);
+  if (!showAlert) {
+    elements.printMonitorAlertMessage.textContent = "";
+    elements.printMonitorAlertLayer.textContent = "";
+    return;
+  }
+  const reasons = [];
+  if (alert?.print_error != null && ![0, "0", ""].includes(alert.print_error)) reasons.push(`错误码 ${alert.print_error}`);
+  if (Array.isArray(alert?.hms) && alert.hms.length) reasons.push(`HMS 告警 ${alert.hms.length} 条`);
+  elements.printMonitorAlertMessage.textContent = reasons.length
+    ? `${alert?.message || "打印机报告异常"}（${reasons.join(" · ")}）`
+    : (alert?.message || "打印机报告异常，请检查设备。");
+  const layer = Number(alert?.layer_num);
+  const total = Number(alert?.total_layer_num);
+  elements.printMonitorAlertLayer.textContent = Number.isFinite(layer)
+    ? `异常发生在第 ${layer}${Number.isFinite(total) ? ` / ${total}` : ""} 层`
+    : "打印机未返回明确的异常层数";
+}
+
 function renderControls(snapshot) {
   const control = snapshot.control || {};
   const canResume = Boolean(control.can_resume);
@@ -436,13 +543,15 @@ function renderSnapshot(snapshot) {
   const [title, summary] = statusPresentation(snapshot);
   elements.statusTitle.textContent = title;
   elements.stageSummary.textContent = summary;
-  elements.statusDot.classList.toggle("hidden", Boolean(snapshot.terminal) || ["stopped", "failed"].includes(snapshot.status));
+  const printMonitorActive = ["printing", "connecting", "waiting"].includes(snapshot.print_monitor?.status);
+  elements.statusDot.classList.toggle("hidden", (Boolean(snapshot.terminal) && !printMonitorActive) || ["stopped", "failed"].includes(snapshot.status));
   const progress = calculateProgress(snapshot);
   const progressActive = Boolean(snapshot.control?.worker_alive) && !snapshot.terminal;
   elements.progressBar.classList.toggle("is-running", progressActive);
   setProgressTarget(snapshot.job_id, progress, progressActive);
   renderTimeline(snapshot);
   renderEvents(snapshot.events);
+  renderPrintMonitor(snapshot);
   renderControls(snapshot);
   renderError(snapshot);
   renderDelivery(snapshot);
@@ -464,10 +573,24 @@ function updateElapsed() {
 }
 
 function historyClass(job) {
-  if (["failed", "credentials_required", "manual_reconciliation_required", "print_rejected"].includes(job.status)) return "error";
-  if (job.status === "paused" || job.control?.status === "pause_requested") return "paused";
+  if (job.print_monitor?.status === "error" || ["failed", "credentials_required", "manual_reconciliation_required", "print_rejected"].includes(job.status)) return "error";
+  if (job.print_monitor?.status === "paused" || job.status === "paused" || job.control?.status === "pause_requested") return "paused";
+  if (["printing", "connecting", "waiting"].includes(job.print_monitor?.status)) return "";
   if (job.terminal) return "complete";
   return "";
+}
+
+function historyStatusText(job) {
+  const monitor = job.print_monitor || {};
+  const prefix = job.source_job_id ? "再次打印 · " : "";
+  if (job.status !== "print_started") return `${prefix}${STATUS_TEXT[job.status] || "处理中"}`;
+  if (monitor.status === "error") return `${prefix}打印异常`;
+  if (monitor.status === "completed") return `${prefix}打印完成`;
+  if (monitor.status === "paused") return `${prefix}打印已暂停`;
+  if (monitor.status === "printing" && Number.isFinite(Number(monitor.percent))) {
+    return `${prefix}打印中 ${Number(monitor.percent).toFixed(1).replace(".0", "")}%`;
+  }
+  return `${prefix}${STATUS_TEXT[job.status]}`;
 }
 
 function renderHistory(jobs) {
@@ -493,7 +616,7 @@ function renderHistory(jobs) {
     const strong = document.createElement("strong");
     strong.textContent = titleFromRequest(job.request_text);
     const small = document.createElement("small");
-    small.textContent = STATUS_TEXT[job.status] || "处理中";
+    small.textContent = historyStatusText(job);
     copy.append(strong, small);
     const time = document.createElement("time");
     const age = Math.max(0, Date.now() / 1000 - Number(job.updated_unix || 0));
@@ -602,7 +725,7 @@ async function refreshCurrent() {
 }
 
 async function createJob() {
-  if (voiceState !== "idle") {
+  if (["recording", "transcribing"].includes(voiceState)) {
     if (voiceState === "recording") stopRecording();
     showToast("请等语音转写完成，再提交打印需求。");
     return;
@@ -615,13 +738,21 @@ async function createJob() {
   }
   elements.sendButton.disabled = true;
   try {
-    if (elements.autoPrintToggle.checked && !confirm("已选择自动打印：Bambu Studio 切片成功后会直接上传并启动实体打印机，不再执行额外可打印性检查。请确认设备、材料与喷嘴匹配，平台已清空。是否开始？")) return;
+    if (elements.autoPrintToggle.checked) {
+      const approved = await requestPrintConfirmation({
+        title: "开启自动打印？",
+        message: "模型切片成功后，系统会自动上传文件并启动实体打印机，不再等待第二次确认。",
+        confirmLabel: "确认自动打印",
+      });
+      if (!approved) return;
+    }
     const snapshot = await api("/api/jobs", {
       method: "POST",
       body: JSON.stringify({ transcript, start_print: elements.autoPrintToggle.checked }),
     });
     elements.promptInput.value = "";
     resizeComposer();
+    setVoiceState("idle");
     renderSnapshot(snapshot);
     await loadJobs(false);
   } catch (error) {
@@ -645,6 +776,33 @@ async function runAction(action, body = {}) {
   }
 }
 
+async function reprintStepOneFiles() {
+  if (!currentSnapshot?.reprint?.available || !selectedJobId) return;
+  const sourceJobId = selectedJobId;
+  const approved = await requestPrintConfirmation({
+    title: "使用步骤 1 文件再次打印？",
+    message: "系统会复用原任务中已校验的模型与 Bambu 切片，新建一条打印记录，并向实体打印机发送一次新的启动指令。",
+    confirmLabel: "确认再次打印",
+  });
+  if (!approved) return;
+  elements.reprintButton.disabled = true;
+  elements.reprintButton.textContent = "正在创建新任务…";
+  try {
+    const snapshot = await api(`/api/jobs/${encodeURIComponent(sourceJobId)}/reprint`, {
+      method: "POST",
+      body: "{}",
+    });
+    renderSnapshot(snapshot);
+    await loadJobs(false);
+    showToast("已复用步骤 1 文件并创建新的打印任务", { duration: 2600 });
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    elements.reprintButton.textContent = "再次打印步骤 1 文件";
+    if (selectedJobId === sourceJobId && currentSnapshot) renderReprint(currentSnapshot);
+  }
+}
+
 function resetComposer() {
   selectedJobId = null;
   currentSnapshot = null;
@@ -654,6 +812,7 @@ function resetComposer() {
   elements.detailsButton.disabled = true;
   elements.autoPrintToggle.disabled = false;
   elements.autoPrintToggle.checked = false;
+  setVoiceState("idle");
   elements.promptInput.focus();
   loadJobs(false);
 }
@@ -741,6 +900,24 @@ function showDialog(dialog) {
   else dialog.setAttribute("open", "");
 }
 
+function requestPrintConfirmation({ title, message, confirmLabel }) {
+  if (printConfirmationResolve) finishPrintConfirmation(false);
+  elements.printConfirmTitle.textContent = title;
+  elements.printConfirmMessage.textContent = message;
+  elements.confirmPrintDispatch.textContent = confirmLabel;
+  showDialog(elements.printConfirmDialog);
+  setTimeout(() => elements.cancelPrintConfirm.focus(), 0);
+  return new Promise((resolve) => { printConfirmationResolve = resolve; });
+}
+
+function finishPrintConfirmation(approved) {
+  const resolve = printConfirmationResolve;
+  if (!resolve) return;
+  printConfirmationResolve = null;
+  elements.printConfirmDialog.close();
+  resolve(approved);
+}
+
 function renderDetails() {
   if (!currentSnapshot) return;
   elements.detailsJobId.textContent = currentSnapshot.job_id;
@@ -751,6 +928,7 @@ function renderDetails() {
     ["控制状态", currentSnapshot.control?.status || "—"],
     ["创建时间", new Date(Number(currentSnapshot.created_unix || 0) * 1000).toLocaleString("zh-CN")],
   ];
+  if (currentSnapshot.source_job_id) rows.splice(1, 0, ["来源任务", currentSnapshot.source_job_id]);
   const fragment = document.createDocumentFragment();
   rows.forEach(([key, value]) => {
     const dt = document.createElement("dt"); dt.textContent = key;
@@ -773,11 +951,22 @@ function closeMobileSidebar() {
 
 function microphoneErrorMessage(code) {
   return ({
-    NotAllowedError: "没有麦克风权限，请在浏览器设置中允许访问。",
-    NotFoundError: "没有检测到可用的麦克风。",
-    NotReadableError: "麦克风正被其他程序占用。",
-    SecurityError: "当前页面没有权限使用麦克风。",
-  })[code] || "无法开始录音，请检查麦克风后重试。";
+    NotAllowedError: "浏览器没有麦克风权限。请允许此网站使用麦克风，然后点“重新检测并录音”。",
+    NotFoundError: "Windows 当前没有启用麦克风输入设备。请连接或启用麦克风，再点“重新检测并录音”；也可以直接导入录音文件。",
+    NotReadableError: "麦克风存在，但无法读取。请关闭正在占用麦克风的会议或录音程序后重试。",
+    OverconstrainedError: "刚才选择的麦克风已不可用，请重新选择设备。",
+    SecurityError: "当前页面没有麦克风访问权限，请使用本机地址打开网站。",
+  })[code] || "无法开始录音，请检查麦克风后重试；也可以导入已有录音文件。";
+}
+
+function microphoneErrorTitle(code) {
+  return ({
+    NotAllowedError: "需要麦克风权限",
+    NotFoundError: "没有可用的麦克风输入",
+    NotReadableError: "麦克风暂时不可用",
+    OverconstrainedError: "所选麦克风已断开",
+    SecurityError: "无法访问麦克风",
+  })[code] || "语音输入没有启动";
 }
 
 function initSpeechAdapter() {
@@ -803,19 +992,66 @@ function preferredAudioType() {
   return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
 }
 
-function setVoiceState(state, message = "") {
+function renderMicrophoneOptions(devices) {
+  const previous = elements.microphoneSelect.value;
+  audioInputDevices = devices;
+  const fragment = document.createDocumentFragment();
+  if (!devices.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "未检测到麦克风";
+    fragment.append(option);
+  } else {
+    devices.forEach((device, index) => {
+      const option = document.createElement("option");
+      option.value = device.deviceId;
+      option.textContent = device.label || `麦克风 ${index + 1}`;
+      fragment.append(option);
+    });
+  }
+  elements.microphoneSelect.replaceChildren(fragment);
+  if (devices.some((device) => device.deviceId === previous)) {
+    elements.microphoneSelect.value = previous;
+  }
+  elements.microphoneSelect.disabled = !devices.length;
+  elements.microphoneSelect.classList.toggle("hidden", devices.length === 0);
+}
+
+async function refreshMicrophoneDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    renderMicrophoneOptions([]);
+    return [];
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((device) => device.kind === "audioinput");
+    renderMicrophoneOptions(inputs);
+    return inputs;
+  } catch (_) {
+    renderMicrophoneOptions([]);
+    return [];
+  }
+}
+
+function setVoiceState(state, message = "", title = "") {
   voiceState = state;
+  const busy = ["recording", "transcribing"].includes(state);
   elements.voiceButton.classList.toggle("recording", state === "recording");
   elements.voiceButton.classList.toggle("transcribing", state === "transcribing");
   elements.voiceButton.disabled = state === "transcribing"
-    || !speechAvailable
-    || !browserRecordingAvailable;
-  elements.sendButton.disabled = state !== "idle";
+    || !speechAvailable;
+  elements.sendButton.disabled = busy;
+  elements.voicePanel.dataset.state = state;
   elements.voicePanel.classList.toggle("hidden", state === "idle");
+  elements.voiceWave.classList.toggle("hidden", !busy);
+  elements.retryMicrophone.classList.toggle("hidden", !["error", "unavailable"].includes(state));
+  elements.voiceFileAction.classList.toggle("hidden", busy);
+  elements.microphoneSelect.classList.toggle("hidden", busy || audioInputDevices.length === 0);
+  if (title) elements.voiceTitle.textContent = title;
   if (message) elements.voiceStatus.textContent = message;
   elements.voiceButton.setAttribute(
     "aria-label",
-    state === "recording" ? "结束录音并转写" : "开始语音输入",
+    state === "recording" ? "结束录音并转写" : state === "review" ? "继续语音输入" : "开始语音输入",
   );
 }
 
@@ -838,13 +1074,25 @@ async function startRecording() {
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    showToast("当前浏览器不支持录音，仍可直接在输入框打字。");
+    const message = "当前浏览器不支持实时录音。你仍可导入录音文件，转成可修改文字。";
+    setVoiceState("unavailable", message, "浏览器不支持实时录音");
+    showToast(message);
     return;
   }
   try {
+    const selectedDeviceId = elements.microphoneSelect.value;
+    const audioConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    if (selectedDeviceId && selectedDeviceId !== "default") {
+      audioConstraints.deviceId = { exact: selectedDeviceId };
+    }
     mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: audioConstraints,
     });
+    await refreshMicrophoneDevices();
     audioChunks = [];
     const mimeType = preferredAudioType();
     mediaRecorder = new MediaRecorder(
@@ -856,12 +1104,12 @@ async function startRecording() {
     });
     mediaRecorder.addEventListener("error", () => {
       closeMediaStream();
-      setVoiceState("idle");
+      setVoiceState("error", "录音过程出现错误，请重新尝试。", "录音意外中断");
       showToast("录音过程出现错误，请重新尝试。");
     });
     mediaRecorder.addEventListener("stop", handleRecordingStopped, { once: true });
     mediaRecorder.start(250);
-    setVoiceState("recording", "正在录音…再次点击麦克风结束并转写");
+    setVoiceState("recording", "正在录音…再次点击麦克风结束并转写", "正在听你说");
     recordingTimer = setTimeout(() => {
       if (voiceState === "recording") {
         stopRecording();
@@ -870,15 +1118,21 @@ async function startRecording() {
     }, 90000);
   } catch (error) {
     closeMediaStream();
-    setVoiceState("idle");
-    showToast(microphoneErrorMessage(error.name));
+    await refreshMicrophoneDevices();
+    const message = microphoneErrorMessage(error.name);
+    setVoiceState(
+      error.name === "NotFoundError" ? "unavailable" : "error",
+      message,
+      microphoneErrorTitle(error.name),
+    );
+    showToast(message);
   }
 }
 
 function stopRecording() {
   if (voiceState === "recording" && mediaRecorder?.state !== "inactive") {
     clearTimeout(recordingTimer);
-    setVoiceState("transcribing", "正在使用本地 Whisper 转写…首次使用可能需要下载模型");
+    setVoiceState("transcribing", "正在使用本地 Whisper 转写…首次使用可能需要下载模型", "正在转成文字");
     mediaRecorder.stop();
   }
 }
@@ -889,15 +1143,45 @@ async function handleRecordingStopped() {
   const recording = new Blob(audioChunks, { type: mimeType });
   audioChunks = [];
   mediaRecorder = null;
+  await transcribeRecording(recording, mimeType);
+}
+
+function recordingContentType(file) {
+  const provided = String(file.type || "").split(";", 1)[0].toLowerCase();
+  const aliases = {
+    "audio/x-m4a": "audio/x-m4a",
+    "audio/mp3": "audio/mpeg",
+    "audio/x-mpeg": "audio/mpeg",
+    "audio/wave": "audio/wav",
+    "audio/vnd.wave": "audio/wav",
+  };
+  if (aliases[provided]) return aliases[provided];
+  if (["audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/x-wav", "audio/aac"].includes(provided)) return provided;
+  const suffix = file.name.toLowerCase().split(".").pop();
+  return ({
+    webm: "audio/webm", ogg: "audio/ogg", mp3: "audio/mpeg",
+    m4a: "audio/mp4", mp4: "audio/mp4", wav: "audio/wav", aac: "audio/aac",
+  })[suffix] || "application/octet-stream";
+}
+
+async function transcribeRecording(recording, contentType) {
   if (recording.size < 128) {
-    setVoiceState("idle");
-    showToast("录音内容太短，请重新说一次。");
+    const message = "录音内容太短，请重新说一次。";
+    setVoiceState("error", message, "没有收到有效录音");
+    showToast(message);
     return;
   }
+  if (recording.size > 20 * 1024 * 1024) {
+    const message = "录音文件超过 20 MB，请缩短录音后重试。";
+    setVoiceState("error", message, "录音文件过大");
+    showToast(message);
+    return;
+  }
+  setVoiceState("transcribing", "正在使用本地 Whisper 转写，完成后文字不会自动发送。", "正在转成文字");
   try {
     const response = await fetch("/api/speech/transcribe?language=zh", {
       method: "POST",
-      headers: { "Content-Type": recording.type || "audio/webm" },
+      headers: { "Content-Type": contentType || recording.type || "audio/webm" },
       body: recording,
     });
     let result = {};
@@ -912,11 +1196,21 @@ async function handleRecordingStopped() {
       elements.promptInput.value.length,
       elements.promptInput.value.length,
     );
-    showToast("语音已转成文字，你可以继续修改后再提交。");
-  } catch (error) {
-    showToast(error.message);
-  } finally {
     setVoiceState("idle");
+    showToast("语音已转成文字。", { duration: 2400 });
+  } catch (error) {
+    setVoiceState("error", error.message, "语音转写没有完成");
+    showToast(error.message);
+  }
+}
+
+async function handleAudioFileSelected() {
+  const file = elements.voiceFileInput.files?.[0];
+  if (!file) return;
+  try {
+    await transcribeRecording(file, recordingContentType(file));
+  } finally {
+    elements.voiceFileInput.value = "";
   }
 }
 
@@ -929,6 +1223,12 @@ elements.promptInput.addEventListener("keydown", (event) => {
   }
 });
 elements.voiceButton.addEventListener("click", startRecording);
+elements.retryMicrophone.addEventListener("click", startRecording);
+elements.voiceFileInput.addEventListener("change", handleAudioFileSelected);
+elements.microphoneSelect.addEventListener("change", () => {
+  const selected = audioInputDevices.find((device) => device.deviceId === elements.microphoneSelect.value);
+  if (selected) showToast(`已选择：${selected.label || "麦克风"}`, { compact: true, duration: 1600 });
+});
 elements.newJobButton.addEventListener("click", resetComposer);
 elements.history.addEventListener("click", (event) => {
   const action = event.target.closest("[data-history-action]");
@@ -956,12 +1256,27 @@ elements.cancelDelete.addEventListener("click", () => {
 elements.confirmDelete.addEventListener("click", confirmDeleteConversation);
 elements.deleteDialog.addEventListener("close", () => { pendingDeleteConversation = null; });
 elements.retryButton.addEventListener("click", () => runAction("retry", { start_print: false }));
+elements.reprintButton.addEventListener("click", reprintStepOneFiles);
 elements.printButton.addEventListener("click", async () => {
   if (!currentSnapshot?.delivery?.available) return;
-  if (!confirm("即将上传当前 Bambu Studio 切片并启动实体打印机。系统不会再做额外可打印性检查；请确认设备、材料与喷嘴匹配、平台已清空。确定开打？")) return;
+  const approved = await requestPrintConfirmation({
+    title: "发送到打印机并开始打印？",
+    message: "当前 Bambu Studio 切片将上传到实体打印机，并发送一次启动指令。",
+    confirmLabel: "确认发送并开打",
+  });
+  if (!approved) return;
   elements.printButton.disabled = true;
   try { await runAction("retry", { start_print: true }); }
   finally { elements.printButton.disabled = false; }
+});
+elements.cancelPrintConfirm.addEventListener("click", () => finishPrintConfirmation(false));
+elements.confirmPrintDispatch.addEventListener("click", () => finishPrintConfirmation(true));
+elements.printConfirmDialog.addEventListener("close", () => {
+  if (printConfirmationResolve) {
+    const resolve = printConfirmationResolve;
+    printConfirmationResolve = null;
+    resolve(false);
+  }
 });
 elements.detailsButton.addEventListener("click", renderDetails);
 $("#closeDetails").addEventListener("click", () => elements.detailsDialog.close());
@@ -986,10 +1301,18 @@ async function initialise() {
   try {
     const health = await api("/api/health");
     speechAvailable = Boolean(health.speech?.available);
-    elements.voiceButton.disabled = !(speechAvailable && browserRecordingAvailable);
+    elements.voiceButton.disabled = !speechAvailable;
     elements.voiceButton.title = speechAvailable
       ? `本地 ${health.speech.model} 模型语音转文字`
       : "本地语音组件尚未安装";
+    if (speechAvailable && browserRecordingAvailable) {
+      const inputs = await refreshMicrophoneDevices();
+      if (!inputs.length) {
+        elements.voiceButton.title = "当前未检测到麦克风；点击查看恢复方式或导入录音";
+      }
+    } else if (speechAvailable) {
+      elements.voiceButton.title = "当前浏览器不支持实时录音；点击后可以导入录音文件";
+    }
     setPrinterStatus(health.printer || {});
   } catch (_) {
     elements.printerCaption.textContent = "本地服务尚未连接";
@@ -998,5 +1321,13 @@ async function initialise() {
   pollTimer = setInterval(refreshCurrent, 900);
   setInterval(updateElapsed, 1000);
 }
+
+navigator.mediaDevices?.addEventListener?.("devicechange", async () => {
+  const inputs = await refreshMicrophoneDevices();
+  if (inputs.length && voiceState === "unavailable") {
+    setVoiceState("idle");
+    showToast("已检测到麦克风，可以开始录音。", { duration: 2600 });
+  }
+});
 
 initialise();

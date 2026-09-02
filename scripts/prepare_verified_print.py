@@ -11,9 +11,10 @@ parser.add_argument("--height-mm",type=float)
 parser.add_argument("--machine",type=Path)
 parser.add_argument("--process",type=Path)
 parser.add_argument("--filament",type=Path,action="append")
+parser.add_argument("--build-plate",default="Textured PEI Plate")
 args = parser.parse_args()
 print("PREPARE", args.source, flush=True)
 result = prepare_verified_print(args.source, args.output,
     target_height_mm=args.height_mm,machine_json=args.machine,process_json=args.process,filament_jsons=args.filament,
-    support_mode="detachable")
+    support_mode="detachable",build_plate=args.build_plate)
 print(json.dumps({k: result[k] for k in ("status", "geometry_path", "preparation_directory", "auto_orient_applied", "source_unchanged")}, indent=2), flush=True)

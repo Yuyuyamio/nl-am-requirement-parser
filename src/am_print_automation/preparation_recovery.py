@@ -1,4 +1,4 @@
-"""Resume obsolete failed preparation without regenerating or discarding history."""
+"""Resume obsolete preparation without regenerating or discarding history."""
 from __future__ import annotations
 from typing import Any, Mapping
 from am_print_executor.preparation_version import PREPARATION_REVISION
@@ -16,6 +16,8 @@ def can_recover_preparation(state: Mapping[str, Any]) -> bool:
         'printability_blocked',
         'failed',
         'stopped',
+        'ready_to_print',
+        'credentials_required',
     }:
         return False
     if state.get('preparation_revision') == PREPARATION_REVISION:
@@ -29,7 +31,7 @@ def can_recover_preparation(state: Mapping[str, Any]) -> bool:
             return False
     if stages.get('m2_stl_handoff', {}).get('status') != 'completed':
         return False
-    return any(
+    blocked_legacy_preparation = any(
         stages.get(name, {}).get('status') == 'completed'
         and (result := stages[name].get('result') or {}).get('status') == 'blocked'
         and result.get('pipeline') in {
@@ -39,3 +41,12 @@ def can_recover_preparation(state: Mapping[str, Any]) -> bool:
         and result.get('preparation_revision') != PREPARATION_REVISION
         for name in PREPARATION_STAGES if name.startswith('bambu_')
     )
+    slice_result = stages.get('bambu_slice', {}).get('result') or {}
+    unvalidated_direct_slice = (
+        stages.get('bambu_slice', {}).get('status') == 'completed'
+        and slice_result.get('status') == 'slice_complete'
+        and slice_result.get('pipeline') == 'bambu_native_direct_print_v2'
+        and slice_result.get('post_slice_validation_performed') is False
+        and slice_result.get('preparation_revision') != PREPARATION_REVISION
+    )
+    return blocked_legacy_preparation or unvalidated_direct_slice

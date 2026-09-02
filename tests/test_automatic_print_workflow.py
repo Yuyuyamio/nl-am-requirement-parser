@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import threading
 import time
 import unittest
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import am_print_automation.workflow as workflow_module
 from am_print_automation.workflow import (
     AutomationConfig,
     AutomationWorkflowError,
+    ProductionServices,
     WorkflowControl,
     WorkflowStopRequested,
     _atomic_write_json,
@@ -196,6 +199,24 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
             provider_timeout_seconds=1.0,
         )
 
+    def test_production_slice_passes_textured_pei_plate_configuration(self) -> None:
+        config = self.config()
+        services = ProductionServices(config)
+        prepare = Mock(return_value={"status": "slice_complete"})
+        with patch.dict(
+            sys.modules,
+            {
+                "am_print_executor.verified_print_preparation": SimpleNamespace(
+                    prepare_verified_print=prepare
+                )
+            },
+        ):
+            services.slice_stl(self.root / "source.stl", self.root / "output.3mf")
+        self.assertEqual(
+            prepare.call_args.kwargs["build_plate"],
+            "Textured PEI Plate",
+        )
+
     def test_prepare_pipeline_is_one_call_and_does_not_request_secret(self) -> None:
         services = FakeServices(self.root)
         secret_calls = 0
@@ -268,6 +289,33 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
         current['status']='needs_geometry_regeneration'
         current['stages']['bambu_slice']['result'].update(status='blocked',pipeline='bambu_native_direct_print_v2')
         self.assertFalse(can_recover_preparation(current))
+
+    def test_ready_but_unvalidated_v2_slice_is_resliced_locally(self) -> None:
+        prepared = run_text_to_print(
+            "print a figurine",
+            config=self.config(),
+            services=FakeServices(self.root),
+        )
+        state_file = Path(prepared.state_file)
+        state = json.loads(state_file.read_text())
+        state["preparation_revision"] = "20260901_bambu_native_direct_print_v2"
+        state["stages"]["bambu_slice"]["result"].update(
+            pipeline="bambu_native_direct_print_v2",
+            preparation_revision="20260901_bambu_native_direct_print_v2",
+            post_slice_validation_performed=False,
+        )
+        _atomic_write_json(state_file, state)
+
+        services = FakeServices(self.root)
+        recovered = run_text_to_print(
+            "print a figurine",
+            config=self.config(),
+            services=services,
+            resume_job_id=prepared.job_id,
+        )
+
+        self.assertEqual(recovered.status, "ready_to_print")
+        self.assertEqual(services.calls, ["bambu_slice"])
 
     def test_preparation_recovery_never_replays_possible_printer_side_effects(self) -> None:
         import copy

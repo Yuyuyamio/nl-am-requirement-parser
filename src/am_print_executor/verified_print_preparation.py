@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 import hashlib
 import json
+import os
 import shutil
 
 from am_print_executor.bambu_auto_orient import (
@@ -12,6 +13,15 @@ from am_print_executor.bambu_auto_orient import (
     auto_orient_with_bambu_cli,
 )
 from am_print_executor.bambu_headless_cli import run_bambu_cli
+from am_print_executor.bambu_project_repair import (
+    TEXTURED_PEI_BED_TYPE,
+    TEXTURED_PEI_PLATE,
+    TEXTURED_PEI_PLA_BED_TEMPERATURE_C,
+    TEXTURED_PEI_Z_COMPENSATION_MM,
+    finalize_bambu_gcode_3mf,
+    validate_bambu_gcode_3mf,
+    validate_bambu_project_3mf,
+)
 from am_print_executor.detachable_support import (
     detachable_process,
     validate_support_mode,
@@ -19,7 +29,7 @@ from am_print_executor.detachable_support import (
 from am_print_executor.preparation_version import PREPARATION_REVISION
 
 
-PIPELINE_NAME = "bambu_native_direct_print_v2"
+PIPELINE_NAME = "bambu_native_direct_print_v3"
 NATIVE_SUPPORT_TYPE = "tree(auto)"
 NATIVE_SUPPORT_STYLE = "tree_hybrid"
 
@@ -31,6 +41,48 @@ def save_report(path: Path, value) -> None:
     )
 
 
+def _apply_textured_pei_pla_temperature(filament_jsons) -> list[dict]:
+    """Pin the material side of the Textured PEI contract before slicing."""
+
+    changes: list[dict] = []
+    for value in filament_jsons:
+        path = Path(value)
+        profile = json.loads(path.read_text(encoding="utf-8-sig"))
+        if not isinstance(profile, dict):
+            raise ValueError(f"filament_profile_must_be_json_object:{path}")
+        raw_types = profile.get("filament_type")
+        filament_types = raw_types if isinstance(raw_types, list) else [raw_types]
+        is_pla = any(str(item).upper() == "PLA" for item in filament_types)
+        changed_keys: list[str] = []
+        if is_pla:
+            for key in ("textured_plate_temp", "textured_plate_temp_initial_layer"):
+                current = profile.get(key)
+                replacement = (
+                    [str(TEXTURED_PEI_PLA_BED_TEMPERATURE_C)] * max(1, len(current))
+                    if isinstance(current, list)
+                    else str(TEXTURED_PEI_PLA_BED_TEMPERATURE_C)
+                )
+                if current != replacement:
+                    profile[key] = replacement
+                    changed_keys.append(key)
+            if changed_keys:
+                save_report(path, profile)
+        changes.append(
+            {
+                "path": str(path),
+                "filament_types": [str(item) for item in filament_types if item is not None],
+                "pla_profile": is_pla,
+                "temperature_c": (
+                    TEXTURED_PEI_PLA_BED_TEMPERATURE_C if is_pla else None
+                ),
+                "changed_keys": changed_keys,
+            }
+        )
+    if not any(item["pla_profile"] for item in changes):
+        raise ValueError("textured_pei_preparation_requires_pla_profile")
+    return changes
+
+
 def slice_fixed_geometry(
     *,
     source: Path,
@@ -39,6 +91,7 @@ def slice_fixed_geometry(
     machine_json: Path,
     process_json: Path,
     filament_jsons,
+    build_plate: str = TEXTURED_PEI_PLATE,
     support_mode: str = "detachable",
 ) -> dict:
     """Slice an oriented project with native tree support, without a GUI."""
@@ -61,6 +114,8 @@ def slice_fixed_geometry(
         artifact.name,
         "--load-settings",
         f"{machine_json};{process_json}",
+        "--curr-bed-type",
+        build_plate,
         "--load-filaments",
         ";".join(map(str, filament_jsons)),
         str(source),
@@ -77,6 +132,12 @@ def slice_fixed_geometry(
             f"Bambu native tree-support slice failed; see {directory / 'slice.json'}"
         )
 
+    finalization = finalize_bambu_gcode_3mf(
+        artifact,
+        expected_bed_type=build_plate,
+    )
+    save_report(directory / "post_slice_validation.json", finalization)
+
     return {
         "artifact": artifact,
         "process_json": Path(process_json),
@@ -84,7 +145,9 @@ def slice_fixed_geometry(
         "support_style": NATIVE_SUPPORT_STYLE,
         "headless": True,
         "bambu_slice_succeeded": True,
-        "post_slice_validation_performed": False,
+        "build_plate": build_plate,
+        "post_slice_validation_performed": True,
+        "post_slice_validation": finalization,
     }
 
 
@@ -100,8 +163,8 @@ def _acceptance_receipt(
     artifact = Path(sliced["artifact"])
     return {
         "status": "pass",
-        "acceptance_basis": "bambu_cli_slice_success",
-        "post_slice_validation_performed": False,
+        "acceptance_basis": "bambu_cli_slice_and_artifact_validation",
+        "post_slice_validation_performed": True,
         "source": str(source),
         "source_sha256": source_hash,
         "source_unchanged": source_hash
@@ -116,6 +179,8 @@ def _acceptance_receipt(
         "support_generator": "bambu_studio_native",
         "support_type": NATIVE_SUPPORT_TYPE,
         "support_style": NATIVE_SUPPORT_STYLE,
+        "build_plate": sliced["build_plate"],
+        "post_slice_validation": sliced["post_slice_validation"],
         "model_self_support_required": False,
         "physical_removal_verified": False,
         "physical_print_performed": False,
@@ -136,6 +201,7 @@ def prepare_verified_print(
     critical_regions: tuple[dict, ...] = (),
     target_height_mm: float | None = None,
     support_mode: str = "detachable",
+    build_plate: str = TEXTURED_PEI_PLATE,
 ) -> dict:
     """Orient and slice with Bambu's automatic tree supports only.
 
@@ -159,6 +225,10 @@ def prepare_verified_print(
     )
 
     validate_support_mode(support_mode)
+    if build_plate != TEXTURED_PEI_PLATE:
+        raise ValueError(
+            "unsupported_build_plate_for_verified_preparation: " + repr(build_plate)
+        )
     source = Path(source).resolve()
     output_path = Path(output_path).resolve()
     if not source.is_file():
@@ -195,6 +265,9 @@ def prepare_verified_print(
         filament_jsons=list(filament_jsons or [discovered["filament"]]),
         cache_dir=directory / "profiles",
     )
+    filament_temperature_changes = _apply_textured_pei_pla_temperature(
+        resolved["filaments"]
+    )
     process = json.loads(Path(resolved["process"]).read_text(encoding="utf-8"))
     process, support_action = detachable_process(process)
     process_file = directory / "bambu_tree_support_process.json"
@@ -216,6 +289,7 @@ def prepare_verified_print(
             require_flat_source=False,
             preserve_source_upright=False,
             trust_bambu_result=True,
+            build_plate=build_plate,
             **profiles,
         )
     except BambuAutoOrientError as exc:
@@ -232,20 +306,57 @@ def prepare_verified_print(
         )
         raise
     save_report(directory / "auto_orient.json", oriented)
+    project_validation = validate_bambu_project_3mf(
+        project,
+        expected_bed_type=build_plate,
+    )
+    save_report(directory / "project_validation.json", project_validation)
     sliced = slice_fixed_geometry(
         source=project,
         directory=directory / "tree_support_slice",
         support_mode=support_mode,
+        build_plate=build_plate,
         **profiles,
     )
+    if source_hash != hashlib.sha256(source.read_bytes()).hexdigest():
+        raise ValueError("source_changed_during_preparation")
+    publish_fd, publish_name = tempfile.mkstemp(
+        prefix=".verified_",
+        suffix=".gcode.3mf",
+        dir=output_path.parent,
+    )
+    os.close(publish_fd)
+    publish_path = Path(publish_name)
+    try:
+        with publish_path.open("wb") as target, Path(sliced["artifact"]).open("rb") as current:
+            shutil.copyfileobj(current, target)
+        delivery_validation = validate_bambu_gcode_3mf(
+            publish_path,
+            expected_bed_type=build_plate,
+        )
+        os.replace(publish_path, output_path)
+    finally:
+        try:
+            publish_path.unlink()
+        except FileNotFoundError:
+            pass
+    delivery_validation["path"] = str(output_path)
+    save_report(directory / "delivery_artifact_validation.json", delivery_validation)
+    published_sliced = {
+        **sliced,
+        "artifact": output_path,
+        "delivery_artifact_validation": delivery_validation,
+    }
     receipt = _acceptance_receipt(
         source=source,
         source_hash=source_hash,
         project=project,
         geometry=prepared,
         oriented=oriented,
-        sliced=sliced,
+        sliced=published_sliced,
     )
+    receipt["delivery_artifact_validation_performed"] = True
+    receipt["delivery_artifact_validation"] = delivery_validation
     save_report(directory / "acceptance.json", receipt)
     save_report(
         directory / "preparation.json",
@@ -261,7 +372,19 @@ def prepare_verified_print(
             "headless": True,
             "bambu_decision_owner": True,
             "post_orientation_validation_performed": False,
-            "post_slice_validation_performed": False,
+            "project_container_validation_performed": True,
+            "project_container_validation": project_validation,
+            "post_slice_validation_performed": True,
+            "post_slice_validation": sliced["post_slice_validation"],
+            "delivery_artifact_validation_performed": True,
+            "delivery_artifact_validation": delivery_validation,
+            "build_plate": {
+                "curr_bed_type": build_plate,
+                "bed_type": TEXTURED_PEI_BED_TYPE,
+                "pla_bed_temperature_c": TEXTURED_PEI_PLA_BED_TEMPERATURE_C,
+                "z_compensation_mm": TEXTURED_PEI_Z_COMPENSATION_MM,
+            },
+            "filament_profile_adjustments": filament_temperature_changes,
             "structural_geometry_changes_requested": bool(allow_structural_changes),
             "structural_geometry_changes_applied": False,
             "critical_regions_recorded": list(critical_regions),
@@ -269,10 +392,6 @@ def prepare_verified_print(
         },
     )
 
-    if source_hash != hashlib.sha256(source.read_bytes()).hexdigest():
-        raise ValueError("source_changed_during_preparation")
-    with output_path.open("xb") as target, Path(sliced["artifact"]).open("rb") as current:
-        shutil.copyfileobj(current, target)
     artifact_hash = hashlib.sha256(output_path.read_bytes()).hexdigest()
     project_hash = hashlib.sha256(project.read_bytes()).hexdigest()
     geometry_hash = hashlib.sha256(prepared.read_bytes()).hexdigest()
@@ -282,14 +401,23 @@ def prepare_verified_print(
         "pipeline": PIPELINE_NAME,
         "preparation_revision": PREPARATION_REVISION,
         "terminal_blocker": None,
-        "acceptance_basis": "bambu_cli_slice_success",
-        "post_slice_validation_performed": False,
+        "acceptance_basis": "bambu_cli_slice_and_artifact_validation",
+        "post_slice_validation_performed": True,
+        "post_slice_validation": sliced["post_slice_validation"],
+        "delivery_artifact_validation_performed": True,
+        "delivery_artifact_validation": delivery_validation,
         "support_mode": "detachable",
         "support_generator": "bambu_studio_native",
         "support_type": NATIVE_SUPPORT_TYPE,
         "support_style": NATIVE_SUPPORT_STYLE,
         "model_self_support_required": False,
         "headless": True,
+        "build_plate": {
+            "curr_bed_type": build_plate,
+            "bed_type": TEXTURED_PEI_BED_TYPE,
+            "pla_bed_temperature_c": TEXTURED_PEI_PLA_BED_TEMPERATURE_C,
+            "z_compensation_mm": TEXTURED_PEI_Z_COMPENSATION_MM,
+        },
         "artifact": {
             "path": str(output_path),
             "sha256": artifact_hash,
@@ -300,6 +428,8 @@ def prepare_verified_print(
             "sha256": project_hash,
             "size_bytes": project.stat().st_size,
         },
+        "project_container_validation_performed": True,
+        "project_container_validation": project_validation,
         "geometry_path": str(prepared),
         "geometry_sha256": geometry_hash,
         "auto_orient_applied": True,

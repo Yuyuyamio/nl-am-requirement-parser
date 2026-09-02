@@ -119,20 +119,64 @@
                 <div class="preview-legend hidden" id="previewLegend"><span class="body">成品本体</span><span class="support">可拆支撑</span><span class="interface">接触界面</span></div>
                 <p id="previewHint" class="preview-hint"></p>
                 <div id="deliveryLinks" class="delivery-links"></div>
-                <button class="control hidden" id="printButton" type="button">确认并开始打印</button>
+                <button class="print-dispatch-button hidden" id="printButton" type="button">
+                  <span class="print-dispatch-icon" aria-hidden="true">↗</span>
+                  <span class="print-dispatch-copy">
+                    <strong>发送到打印机</strong>
+                    <small>确认后上传当前切片并开始打印</small>
+                  </span>
+                </button>
               </section>
 
-              <div class="progress-card">
-                <div class="progress-head">
-                  <span id="progressLabel">总进度</span>
-                  <strong id="progressValue">0%</strong>
-                </div>
-                <div class="progress-track"><span id="progressBar"></span></div>
-                <ol class="timeline" id="timeline"></ol>
-                <details class="activity-details">
-                  <summary>查看运行记录 <span id="eventCount">0 条</span></summary>
-                  <div class="event-log" id="eventLog"></div>
-                </details>
+              <div class="progress-stack">
+                <section class="progress-card preparation-progress-card" aria-label="生成打印任务">
+                  <div class="progress-phase-heading">
+                    <span>01</span>
+                    <div><strong>生成打印任务</strong><small>建模、修复、切片并发送</small></div>
+                  </div>
+                  <div class="progress-head">
+                    <span id="progressLabel">任务生成进度</span>
+                    <strong id="progressValue">0%</strong>
+                  </div>
+                  <div class="progress-track"><span id="progressBar"></span></div>
+                  <ol class="timeline" id="timeline"></ol>
+                  <details class="activity-details">
+                    <summary>查看运行记录 <span id="eventCount">0 条</span></summary>
+                    <div class="event-log" id="eventLog"></div>
+                  </details>
+                </section>
+
+                <section class="progress-card print-progress-card hidden" id="printProgressCard" aria-label="打印期间" aria-live="polite">
+                  <div class="progress-phase-heading">
+                    <span>02</span>
+                    <div><strong>打印期间</strong><small id="printProgressCaption">等待打印任务生成完成</small></div>
+                  </div>
+                  <div class="progress-head">
+                    <span id="printProgressLabel">实体打印进度</span>
+                    <strong id="printProgressValue">0%</strong>
+                  </div>
+                  <div class="progress-track print-progress-track"><span id="printProgressBar"></span></div>
+                  <div class="print-monitor-summary">
+                    <span class="print-state-dot" id="printStateDot" aria-hidden="true"></span>
+                    <strong id="printStateText">等待打印</strong>
+                    <small id="printRemainingText">生成完成后自动开始监控</small>
+                  </div>
+                  <div class="print-monitor-alert hidden" id="printMonitorAlert" role="alert">
+                    <strong>打印异常</strong>
+                    <p id="printMonitorAlertMessage"></p>
+                    <small id="printMonitorAlertLayer"></small>
+                  </div>
+                  <p class="layer-monitor-note" id="layerMonitorNote">逐层状态正在后台监控；正常层不逐条展示。</p>
+                  <div class="reprint-panel hidden" id="reprintPanel">
+                    <div class="reprint-panel-copy">
+                      <span>再次打印</span>
+                      <strong>使用步骤 1 文件重新开打一份</strong>
+                      <small>复用已校验的模型与切片，不重新建模、不重新切片。</small>
+                    </div>
+                    <button id="reprintButton" type="button" disabled>再次打印步骤 1 文件</button>
+                    <p id="reprintHint">原任务结束且打印机安全空闲后开放。</p>
+                  </div>
+                </section>
               </div>
               <div class="control-row" id="controlRow">
                 <button class="control pause" id="pauseButton" type="button">Ⅱ&nbsp;&nbsp;暂停</button>
@@ -153,9 +197,20 @@
               <button class="send-button" id="sendButton" type="submit" aria-label="开始制作">↑</button>
             </div>
           </form>
-          <div class="voice-panel hidden" id="voicePanel" aria-live="polite">
-            <div class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-            <span id="voiceStatus">录音结束后会在本机转成可编辑文字</span>
+          <div class="voice-panel hidden" id="voicePanel" data-state="idle">
+            <div class="voice-wave hidden" id="voiceWave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="voice-panel-copy" aria-live="polite">
+              <strong id="voiceTitle">语音输入</strong>
+              <span id="voiceStatus">录音结束后会在本机转成可编辑文字</span>
+            </div>
+            <div class="voice-panel-actions">
+              <select class="hidden" id="microphoneSelect" aria-label="选择麦克风"></select>
+              <button class="hidden" id="retryMicrophone" type="button">重新检测并录音</button>
+              <label class="voice-file-action" id="voiceFileAction">
+                导入录音
+                <input id="voiceFileInput" type="file" accept="audio/webm,audio/ogg,audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/x-m4a,audio/aac,.webm,.ogg,.mp3,.m4a,.mp4,.wav,.aac">
+              </label>
+            </div>
           </div>
           <div class="composer-note">默认只生成文件；开启自动打印后，Bambu 切片成功即上传开打。请提前确认材料、喷嘴和平台状态。</div>
         </div>
@@ -231,6 +286,22 @@
       <div>
         <button id="cancelDelete" type="button">取消</button>
         <button class="danger-button" id="confirmDelete" type="button">删除对话</button>
+      </div>
+    </dialog>
+
+    <dialog class="confirm-dialog print-confirm-dialog" id="printConfirmDialog">
+      <div class="confirm-icon print-confirm-icon" aria-hidden="true">↗</div>
+      <span class="print-confirm-kicker">PHYSICAL PRINT</span>
+      <h3 id="printConfirmTitle">发送到打印机并开始打印？</h3>
+      <p id="printConfirmMessage">当前 Bambu Studio 切片将上传到实体打印机，并发送一次启动指令。</p>
+      <ul class="print-confirm-checks" aria-label="发送前检查">
+        <li>打印机空闲，打印平台已经清空</li>
+        <li>材料、喷嘴与当前切片配置一致</li>
+        <li>发送后如需中止，请使用打印机或官方设备控制</li>
+      </ul>
+      <div>
+        <button id="cancelPrintConfirm" type="button">先不发送</button>
+        <button class="print-confirm-primary" id="confirmPrintDispatch" type="button">确认发送并开打</button>
       </div>
     </dialog>
 

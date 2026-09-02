@@ -14,6 +14,59 @@ from am_print_frontend.delivery import DeliveryUnavailable, verified_files
 from am_print_frontend.server import JobManager, create_server
 
 
+def _settings(**extra) -> dict:
+    return {
+        "curr_bed_type": "Textured PEI Plate",
+        "filament_type": ["PLA"],
+        "textured_plate_temp": ["55"],
+        "textured_plate_temp_initial_layer": ["55"],
+        **extra,
+    }
+
+
+def _write_project(path: Path, *, malformed_xml: bool = False) -> None:
+    model_settings = (
+        '<config><metadata key="name" value="broken & value"/></config>'
+        if malformed_xml
+        else "<config/>"
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("3D/3dmodel.model", "<model/>")
+        archive.writestr("Metadata/model_settings.config", model_settings)
+        archive.writestr("Metadata/slice_info.config", "<config/>")
+        archive.writestr("Metadata/project_settings.config", json.dumps(_settings()))
+
+
+def _write_gcode(path: Path, gcode: str | None = None, **settings) -> None:
+    text = gcode or """; curr_bed_type = Textured PEI Plate
+;curr_bed_type=Textured PEI Plate
+M140 S55
+M190 S55
+G29.1 Z-0.04 ; for Textured PEI Plate
+G1 X1 Y1 E1
+"""
+    raw = text.encode("utf-8")
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("3D/3dmodel.model", "<model/>")
+        archive.writestr("Metadata/model_settings.config", "<config/>")
+        archive.writestr("Metadata/slice_info.config", "<config/>")
+        archive.writestr(
+            "Metadata/project_settings.config",
+            json.dumps(_settings(**settings)),
+        )
+        archive.writestr(
+            "Metadata/plate_1.json",
+            json.dumps({"bed_type": "textured_plate"}),
+        )
+        archive.writestr("Metadata/plate_1.gcode", raw)
+        archive.writestr(
+            "Metadata/plate_1.gcode.md5",
+            hashlib.md5(raw).hexdigest().upper(),
+        )
+
+
 class TestFinalDelivery(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -22,16 +75,36 @@ class TestFinalDelivery(unittest.TestCase):
         self.job = self.root / "AUTO-DELIVERY"
         self.job.mkdir()
         self.files = {}
-        for kind, name in {"project": "final.3mf", "stl": "final.stl", "gcode": "final.gcode.3mf"}.items():
-            path = self.job / name
-            path.write_bytes(("final " + kind).encode())
+        project_path = self.job / "final.3mf"
+        gcode_path = self.job / "final.gcode.3mf"
+        stl_path = self.job / "final.stl"
+        _write_project(project_path)
+        _write_gcode(gcode_path)
+        stl_path.write_bytes(b"final stl")
+        for kind, path in {
+            "project": project_path,
+            "gcode": gcode_path,
+            "stl": stl_path,
+        }.items():
             self.files[kind] = (str(path), hashlib.sha256(path.read_bytes()).hexdigest())
         project, phash = self.files["project"]
         stl, shash = self.files["stl"]
         gcode, ghash = self.files["gcode"]
-        prepared = {"status": "slice_complete", "pipeline": "bambu_native_direct_print_v2",
-                    "acceptance_basis": "bambu_cli_slice_success",
-                    "post_slice_validation_performed": False,
+        prepared = {"status": "slice_complete", "pipeline": "bambu_native_direct_print_v3",
+                    "acceptance_basis": "bambu_cli_slice_and_artifact_validation",
+                    "post_slice_validation_performed": True,
+                    "post_slice_validation": {
+                        "status": "bambu_gcode_3mf_finalized",
+                        "validation": {"status": "bambu_gcode_3mf_validated"},
+                    },
+                    "project_container_validation_performed": True,
+                    "project_container_validation": {"status": "bambu_project_3mf_validated"},
+                    "delivery_artifact_validation_performed": True,
+                    "delivery_artifact_validation": {"status": "bambu_gcode_3mf_validated"},
+                    "build_plate": {"curr_bed_type": "Textured PEI Plate",
+                                    "bed_type": "textured_plate",
+                                    "pla_bed_temperature_c": 55,
+                                    "z_compensation_mm": -0.04},
                     "support_mode": "detachable", "support_generator": "bambu_studio_native",
                     "support_type": "tree(auto)", "support_style": "tree_hybrid", "headless": True,
                     "model_self_support_required": False, "auto_orient_applied": True,
@@ -74,9 +147,11 @@ class TestFinalDelivery(unittest.TestCase):
 
     def test_support_preview_uses_verified_gcode_and_maps_nozzle_offset(self):
         gcode_path = Path(self.files["gcode"][0])
-        with zipfile.ZipFile(gcode_path, "w") as archive:
-            archive.writestr("Metadata/project_settings.config", json.dumps({"extruder_offset": ["1x2"]}))
-            archive.writestr("Metadata/plate_1.gcode", """
+        _write_gcode(gcode_path, """; curr_bed_type = Textured PEI Plate
+;curr_bed_type=Textured PEI Plate
+M140 S55
+M190 S55
+G29.1 Z-0.04 ; for Textured PEI Plate
 M83
 G90
 ; FEATURE:Support
@@ -88,7 +163,7 @@ G1 X12 Y20 E1
 G1 Z0.4
 G1 X10 Y20
 G1 X12 Y20 E1
-""")
+""", extruder_offset=["1x2"])
         digest = hashlib.sha256(gcode_path.read_bytes()).hexdigest()
         self.files["gcode"] = (str(gcode_path), digest)
         self.prepared["artifact"]["sha256"] = digest
@@ -123,6 +198,15 @@ G1 X12 Y20 E1
         with self.assertRaises(DeliveryUnavailable):
             verified_files(self.state, self.job)
 
+    def test_correct_outer_hash_does_not_allow_invalid_internal_xml(self):
+        project_path = Path(self.files["project"][0])
+        _write_project(project_path, malformed_xml=True)
+        digest = hashlib.sha256(project_path.read_bytes()).hexdigest()
+        self.files["project"] = (str(project_path), digest)
+        self.prepared["project"]["sha256"] = digest
+        with self.assertRaisesRegex(DeliveryUnavailable, "内部"):
+            verified_files(self.state, self.job)
+
     def test_legacy_printability_fields_do_not_block_bambu_slice_delivery(self):
         self.prepared.update(
             dangerous_layer_count=999,
@@ -137,7 +221,12 @@ G1 X12 Y20 E1
             with self.assertRaises(DeliveryUnavailable):
                 verified_files(self.state, self.job)
         self.state["status"] = "ready_to_print"
-        self.prepared["pipeline"] = "bambu_native_tree_support_v1"
+        self.prepared["pipeline"] = "bambu_native_direct_print_v2"
+        with self.assertRaises(DeliveryUnavailable):
+            verified_files(self.state, self.job)
+
+    def test_unvalidated_slice_record_is_never_downloadable(self):
+        self.prepared["post_slice_validation_performed"] = False
         with self.assertRaises(DeliveryUnavailable):
             verified_files(self.state, self.job)
 

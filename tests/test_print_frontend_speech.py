@@ -74,6 +74,22 @@ class TestSpeechTranscriber(unittest.TestCase):
                 content_type="application/octet-stream",
             )
 
+    def test_accepts_m4a_recording_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = _FakeModel()
+            transcriber = SpeechTranscriber(
+                cache_directory=Path(temporary) / "models",
+                model_factory=lambda *args, **kwargs: model,
+            )
+
+            result = transcriber.transcribe(
+                b"m4a-recorded-audio" * 20,
+                content_type="audio/x-m4a",
+            )
+
+            self.assertEqual(result["text"], "打印一个十厘米高的花瓶")
+            self.assertEqual(model.audio_path.suffix, ".m4a")
+
 
 if __name__ == "__main__":
     unittest.main()

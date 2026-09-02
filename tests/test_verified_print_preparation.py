@@ -2,14 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+import hashlib
 import json
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import trimesh
 
 from am_print_executor.bambu_headless_cli import BambuCliResult
+from am_print_executor.bambu_project_repair import (
+    finalize_bambu_gcode_3mf,
+    validate_bambu_gcode_3mf,
+)
 from am_print_executor.verified_print_preparation import (
     PIPELINE_NAME,
     prepare_verified_print,
@@ -21,6 +27,60 @@ def grounded_box() -> trimesh.Trimesh:
     mesh = trimesh.creation.box((10, 10, 10))
     mesh.apply_translation((0, 0, 5))
     return mesh
+
+
+def textured_settings() -> dict:
+    return {
+        "curr_bed_type": "Textured PEI Plate",
+        "filament_type": ["PLA"],
+        "textured_plate_temp": ["55"],
+        "textured_plate_temp_initial_layer": ["55"],
+    }
+
+
+def write_project(path: Path) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("3D/3dmodel.model", "<model/>")
+        archive.writestr("Metadata/model_settings.config", "<config/>")
+        archive.writestr("Metadata/slice_info.config", "<config/>")
+        archive.writestr(
+            "Metadata/project_settings.config",
+            json.dumps(textured_settings()),
+        )
+
+
+def write_gcode_project(path: Path, *, malformed_xml: bool = False) -> None:
+    gcode = b"""; curr_bed_type = Textured PEI Plate
+;curr_bed_type=Textured PEI Plate
+; filament_type = PLA
+; textured_plate_temp = 55
+; textured_plate_temp_initial_layer = 55
+M140 S55 ;set bed temp
+M190 S55 ;wait for bed temp
+G29.1 Z-0.04 ; for Textured PEI Plate
+G1 X1 Y1 E1
+"""
+    model_settings = (
+        '<config>\n<metadata key="compatible_printers" value=""X1";"P1""/>\n</config>'
+        if malformed_xml
+        else "<config/>"
+    )
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("3D/3dmodel.model", "<model/>")
+        archive.writestr("Metadata/model_settings.config", model_settings)
+        archive.writestr("Metadata/slice_info.config", "<config/>")
+        archive.writestr(
+            "Metadata/project_settings.config",
+            json.dumps(textured_settings()),
+        )
+        archive.writestr(
+            "Metadata/plate_1.json",
+            json.dumps({"bed_type": "textured_plate"}),
+        )
+        archive.writestr("Metadata/plate_1.gcode", gcode)
+        archive.writestr("Metadata/plate_1.gcode.md5", "STALE")
 
 
 class BambuNativeTreePreparationTests(unittest.TestCase):
@@ -43,7 +103,11 @@ class BambuNativeTreePreparationTests(unittest.TestCase):
             "outer_wall_line_width": "0.42",
         }))
         self.filament = self.root / "filament.json"
-        self.filament.write_text("{}")
+        self.filament.write_text(json.dumps({
+            "filament_type": ["PLA"],
+            "textured_plate_temp": ["35"],
+            "textured_plate_temp_initial_layer": ["35"],
+        }))
 
     def resolved_profiles(self):
         return {
@@ -55,21 +119,24 @@ class BambuNativeTreePreparationTests(unittest.TestCase):
     def sliced_result(self, directory: Path):
         directory.mkdir(parents=True)
         artifact = directory / "candidate.gcode.3mf"
-        artifact.write_bytes(b"native-tree-gcode")
+        write_gcode_project(artifact, malformed_xml=True)
+        finalization = finalize_bambu_gcode_3mf(artifact)
         return {
             "artifact": artifact,
             "support_type": "tree(auto)",
             "support_style": "tree_hybrid",
             "headless": True,
             "bambu_slice_succeeded": True,
-            "post_slice_validation_performed": False,
+            "build_plate": "Textured PEI Plate",
+            "post_slice_validation_performed": True,
+            "post_slice_validation": finalization,
         }
 
     def run_preparation(self):
         output = self.root / "output.gcode.3mf"
         def oriented_result(**kwargs):
             project = Path(kwargs["output_path"])
-            project.write_bytes(b"auto-oriented-project")
+            write_project(project)
             return {
                 "status": "auto_orient_complete",
                 "headless": True,
@@ -108,11 +175,19 @@ class BambuNativeTreePreparationTests(unittest.TestCase):
         self.assertEqual(result["support_style"], "tree_hybrid")
         self.assertTrue(result["headless"])
         self.assertFalse(result["model_self_support_required"])
-        self.assertEqual(result["acceptance_basis"], "bambu_cli_slice_success")
-        self.assertFalse(result["post_slice_validation_performed"])
+        self.assertEqual(
+            result["acceptance_basis"],
+            "bambu_cli_slice_and_artifact_validation",
+        )
+        self.assertTrue(result["post_slice_validation_performed"])
+        self.assertEqual(result["build_plate"]["curr_bed_type"], "Textured PEI Plate")
+        self.assertEqual(result["build_plate"]["bed_type"], "textured_plate")
+        self.assertEqual(result["build_plate"]["pla_bed_temperature_c"], 55)
+        self.assertEqual(result["build_plate"]["z_compensation_mm"], -0.04)
         self.assertFalse(orient.call_args.kwargs["require_flat_source"])
         self.assertFalse(orient.call_args.kwargs["preserve_source_upright"])
         self.assertTrue(orient.call_args.kwargs["trust_bambu_result"])
+        self.assertEqual(orient.call_args.kwargs["build_plate"], "Textured PEI Plate")
         preparation = json.loads(
             (Path(result["preparation_directory"]) / "preparation.json").read_text()
         )
@@ -123,16 +198,26 @@ class BambuNativeTreePreparationTests(unittest.TestCase):
         self.assertEqual(profile["enable_support"], "1")
         self.assertEqual(profile["support_type"], "tree(auto)")
         self.assertEqual(profile["support_style"], "tree_hybrid")
+        filament = json.loads(self.filament.read_text())
+        self.assertEqual(filament["textured_plate_temp"], ["55"])
+        self.assertEqual(filament["textured_plate_temp_initial_layer"], ["55"])
+        self.assertEqual(
+            validate_bambu_gcode_3mf(output)["status"],
+            "bambu_gcode_3mf_validated",
+        )
 
-    def test_bambu_slice_success_is_published_without_post_slice_validation(self):
+    def test_bambu_slice_success_is_published_only_after_post_slice_validation(self):
         output, result, orient = self.run_preparation()
         self.assertEqual(result["status"], "slice_complete")
         self.assertTrue(output.exists())
         self.assertEqual(orient.call_count, 1)
         self.assertIsNone(result["terminal_blocker"])
         receipt = result["acceptance"]
-        self.assertEqual(receipt["acceptance_basis"], "bambu_cli_slice_success")
-        self.assertFalse(receipt["post_slice_validation_performed"])
+        self.assertEqual(
+            receipt["acceptance_basis"],
+            "bambu_cli_slice_and_artifact_validation",
+        )
+        self.assertTrue(receipt["post_slice_validation_performed"])
         self.assertNotIn("flat_base", receipt)
         self.assertNotIn("removal", receipt)
         self.assertNotIn("dangerous_layer_count", receipt)
@@ -176,7 +261,10 @@ class BambuNativeTreePreparationTests(unittest.TestCase):
         )
 
         def run(command, **kwargs):
-            (directory / "candidate.gcode.3mf").write_bytes(b"gcode")
+            write_gcode_project(
+                directory / "candidate.gcode.3mf",
+                malformed_xml=True,
+            )
             return execution
 
         with patch(
@@ -193,9 +281,23 @@ class BambuNativeTreePreparationTests(unittest.TestCase):
             )
         command = runner.call_args.args[0]
         self.assertIn("--support-type=tree(auto)", command)
+        self.assertEqual(
+            command[command.index("--curr-bed-type") + 1],
+            "Textured PEI Plate",
+        )
         self.assertTrue(result["headless"])
         self.assertTrue(result["bambu_slice_succeeded"])
-        self.assertFalse(result["post_slice_validation_performed"])
+        self.assertTrue(result["post_slice_validation_performed"])
+        self.assertTrue(
+            result["post_slice_validation"]["xml_repair"]["repaired"]
+        )
+        self.assertTrue(
+            result["post_slice_validation"]["gcode_md5"]["rewritten"]
+        )
+        with zipfile.ZipFile(directory / "candidate.gcode.3mf") as archive:
+            gcode = archive.read("Metadata/plate_1.gcode")
+            stored = archive.read("Metadata/plate_1.gcode.md5").decode("ascii")
+        self.assertEqual(stored, hashlib.md5(gcode).hexdigest().upper())
 
 
 if __name__ == "__main__":

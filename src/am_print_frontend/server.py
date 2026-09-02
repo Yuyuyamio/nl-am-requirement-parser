@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 import re
+import shutil
 import threading
 import time
 import uuid
 import webbrowser
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +36,7 @@ from am_print_executor.x1c_connection import (
 
 from .speech import SpeechTranscriber, SpeechTranscriptionError
 from .delivery import DOWNLOAD_NAMES, DeliveryUnavailable, delivery_summary, verified_files
+from .print_monitor import X1CLiveMonitor, summarize_print_status
 from .support_preview import SupportPreviewError, build_support_preview
 
 
@@ -53,7 +56,7 @@ _RUNTIME_DEPENDENCIES = {
 }
 _JOB_ROUTE = re.compile(
     r"^/api/jobs/(?P<job_id>[A-Za-z0-9][A-Za-z0-9._-]{2,63})"
-    r"(?:/(?P<action>pause|resume|stop|retry|pin|unpin))?$"
+    r"(?:/(?P<action>pause|resume|stop|retry|reprint|pin|unpin))?$"
 )
 _FILE_ROUTE = re.compile(
     r"^/api/jobs/(?P<job_id>[A-Za-z0-9][A-Za-z0-9._-]{2,63})/files/(?P<kind>project|gcode|stl)$"
@@ -170,14 +173,17 @@ class JobManager:
         workflow_runner: Callable[..., Any] = run_text_to_print,
         access_code_provider: Callable[[], str] | None = None,
         printer_connection_provider: Callable[[], Mapping[str, Any]] | None = None,
+        reprint_services_factory: Callable[[AutomationConfig], Any] | None = None,
     ) -> None:
         self.output_root = Path(output_root).expanduser().resolve()
         self.output_root.mkdir(parents=True, exist_ok=True)
         self._workflow_runner = workflow_runner
         self._access_code_provider = access_code_provider
         self._printer_connection_provider = printer_connection_provider
+        self._reprint_services_factory = reprint_services_factory
         self._runtimes: dict[str, _RuntimeJob] = {}
         self._lock = threading.RLock()
+        self._reprint_dispatch_in_progress = False
         self._ui_preferences_path = self.output_root / ".frontend_ui_preferences.json"
 
     def set_access_code_provider(
@@ -264,6 +270,283 @@ class JobManager:
         )
         self._launch(runtime, resume=True)
         return self.snapshot(job_id)
+
+    def reprint_job(self, source_job_id: str) -> dict[str, Any]:
+        """Create a new print record from a verified step-1 slice."""
+
+        source_state = self._state(source_job_id)
+        if source_state.get("status") != "print_started":
+            raise ApiError(
+                HTTPStatus.CONFLICT,
+                "只有已经启动过实体打印的任务，才能使用步骤 1 文件再次打印。",
+            )
+        with self._lock:
+            if self._reprint_dispatch_in_progress:
+                raise ApiError(
+                    HTTPStatus.CONFLICT,
+                    "另一个再次打印请求正在发送，请等待打印机返回结果。",
+                )
+            self._reprint_dispatch_in_progress = True
+
+        launched = False
+        try:
+            safety_monitor = self._live_printer_monitor_snapshot()
+            if safety_monitor is None or safety_monitor.get("restart_ready") is not True:
+                raise ApiError(
+                    HTTPStatus.CONFLICT,
+                    "当前打印还没有安全结束。请先在打印机端结束任务，并等待设备空闲、无告警且完成降温。",
+                )
+            if self._access_code_provider is None:
+                raise ApiError(HTTPStatus.CONFLICT, "请先重新连接打印机，再次打印需要当前访问码。")
+            credential_available = False
+            secret = ""
+            try:
+                secret = str(self._access_code_provider()).strip()
+                credential_available = bool(secret)
+            except Exception as exc:
+                raise ApiError(HTTPStatus.CONFLICT, "请先重新连接打印机，再尝试再次打印。") from exc
+            finally:
+                secret = ""
+            if not credential_available:
+                raise ApiError(HTTPStatus.CONFLICT, "请先重新连接打印机，再尝试再次打印。")
+            if self._printer_connection_provider is None:
+                raise ApiError(HTTPStatus.CONFLICT, "没有可用的打印机连接，请先重新连接。")
+            try:
+                connection = dict(self._printer_connection_provider())
+            except Exception as exc:
+                raise ApiError(HTTPStatus.CONFLICT, "无法读取当前打印机连接，请先重新连接。") from exc
+            if connection.get("connected") is not True:
+                raise ApiError(HTTPStatus.CONFLICT, "打印机当前未连接，请先重新连接。")
+
+            try:
+                source_files = verified_files(
+                    source_state,
+                    self.output_root / source_job_id,
+                )
+            except (DeliveryUnavailable, OSError, TypeError, AttributeError) as exc:
+                raise ApiError(
+                    HTTPStatus.CONFLICT,
+                    "步骤 1 文件缺失或完整性校验失败，不能直接再次打印。",
+                ) from exc
+
+            runtime, reprint_state, gcode_path = self._prepare_reprint(
+                source_job_id,
+                source_state,
+                source_files,
+            )
+            self._launch_reprint(runtime, reprint_state, gcode_path)
+            launched = True
+            return self.snapshot(runtime.job_id)
+        except BaseException:
+            if not launched:
+                with self._lock:
+                    self._reprint_dispatch_in_progress = False
+            raise
+
+    def _prepare_reprint(
+        self,
+        source_job_id: str,
+        source_state: Mapping[str, Any],
+        source_files: Mapping[str, tuple[Path, str]],
+    ) -> tuple[_RuntimeJob, Any, Path]:
+        from am_print_automation.workflow import _JobState
+
+        job_id = create_job_id()
+        while (self.output_root / job_id).exists():
+            job_id = create_job_id()
+        config = replace(
+            _config_from_state(
+                source_state,
+                output_root=self.output_root,
+                start_print=True,
+            ),
+            remote_name=None,
+        )
+        job_directory = self.output_root / job_id
+        reused_directory = job_directory / "reused_step1"
+        reused_directory.mkdir(parents=True, exist_ok=False)
+        copied: dict[str, tuple[Path, str]] = {}
+        for kind in ("project", "gcode", "stl"):
+            source_path, expected_digest = source_files[kind]
+            destination = reused_directory / DOWNLOAD_NAMES[kind]
+            shutil.copy2(source_path, destination)
+            actual_digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+            if actual_digest != expected_digest:
+                raise ApiError(
+                    HTTPStatus.CONFLICT,
+                    "复制步骤 1 文件时完整性校验失败，已停止再次打印。",
+                )
+            copied[kind] = (destination.resolve(), actual_digest)
+
+        text = str(source_state.get("request_text", ""))
+        state = _JobState(
+            job_directory=job_directory,
+            job_id=job_id,
+            text=text,
+            config=config,
+            resume=False,
+            event_sink=None,
+        )
+        stages = copy.deepcopy(source_state.get("stages", {}))
+        if not isinstance(stages, dict):
+            stages = {}
+        stages.pop("printer_upload", None)
+        stages.pop("print_start", None)
+        for record in stages.values():
+            if isinstance(record, dict):
+                record["reused_from_job_id"] = source_job_id
+
+        slice_record = stages.get("bambu_slice")
+        slice_result = slice_record.get("result") if isinstance(slice_record, dict) else None
+        if not isinstance(slice_result, dict):
+            raise ApiError(HTTPStatus.CONFLICT, "步骤 1 的切片记录不完整，不能再次打印。")
+        artifact = slice_result.get("artifact")
+        project = slice_result.get("project")
+        if not isinstance(artifact, dict) or not isinstance(project, dict):
+            raise ApiError(HTTPStatus.CONFLICT, "步骤 1 的切片记录不完整，不能再次打印。")
+        artifact["path"], artifact["sha256"] = str(copied["gcode"][0]), copied["gcode"][1]
+        project["path"], project["sha256"] = str(copied["project"][0]), copied["project"][1]
+        slice_result["geometry_path"] = str(copied["stl"][0])
+        slice_result["geometry_sha256"] = copied["stl"][1]
+        slice_result["reused_from_job_id"] = source_job_id
+        slice_result["reuse_mode"] = "verified_step1_files"
+
+        state.data["schema_version"] = "automatic-reprint-workflow-v1"
+        state.data["source_job_id"] = source_job_id
+        state.data["reprint_mode"] = "verified_step1_files"
+        state.data["status"] = "ready_to_print"
+        state.data["current_stage"] = None
+        state.data["stages"] = stages
+        state.save()
+        state.emit(
+            "reprint_source_reused",
+            "bambu_slice",
+            {
+                "source_job_id": source_job_id,
+                "reuse_mode": "verified_step1_files",
+                "files_verified": True,
+            },
+        )
+        runtime = _RuntimeJob(
+            job_id=job_id,
+            transcript=text,
+            config=config,
+            control=WorkflowControl(),
+            started_unix=time.time(),
+        )
+        return runtime, state, copied["gcode"][0]
+
+    def _launch_reprint(self, runtime: _RuntimeJob, state: Any, gcode_path: Path) -> None:
+        def checkpoint() -> None:
+            runtime.control.checkpoint(
+                on_paused=state.pause,
+                on_resumed=state.resume,
+            )
+
+        def work() -> None:
+            access_code = ""
+            try:
+                checkpoint()
+                state.begin_stage("printer_upload")
+                try:
+                    if self._access_code_provider is None:
+                        raise AutomationWorkflowError("Printer access code is unavailable.")
+                    access_code = str(self._access_code_provider()).strip()
+                    if not access_code:
+                        raise AutomationWorkflowError("Printer access code is unavailable.")
+                    printer_connection = (
+                        dict(self._printer_connection_provider())
+                        if self._printer_connection_provider is not None
+                        else None
+                    )
+                    services = (
+                        self._reprint_services_factory(runtime.config)
+                        if self._reprint_services_factory is not None
+                        else self._production_services(runtime.config)
+                    )
+                    upload = services.upload_gcode(
+                        gcode_path,
+                        access_code,
+                        printer_connection=printer_connection,
+                    )
+                    if not isinstance(upload, Mapping):
+                        raise TypeError("Printer upload did not return a mapping")
+                    upload = dict(upload)
+                except BaseException as exc:
+                    state.fail_stage("printer_upload", exc)
+                    raise
+                state.complete_stage("printer_upload", upload)
+
+                checkpoint()
+                while not runtime.control.begin_irreversible():
+                    checkpoint()
+                state.begin_stage("print_start")
+                state.data["stages"]["print_start"]["dispatch_policy"] = "exactly_once_no_replay"
+                state.save()
+                try:
+                    start_result = services.start_print(upload, access_code)
+                    if not isinstance(start_result, Mapping):
+                        raise TypeError("Print start did not return a mapping")
+                    started = dict(start_result)
+                except BaseException as exc:
+                    state.fail_stage("print_start", exc, outcome_unknown=True)
+                    raise
+                state.complete_stage("print_start", started)
+                print_status = str(started.get("status", ""))
+                if print_status == "direct_print_started":
+                    state.finish("print_started")
+                elif print_status in {"direct_print_start_outcome_unknown", ""}:
+                    error = AutomationWorkflowError(
+                        f"Printer start outcome is unknown: {print_status or 'missing status'}"
+                    )
+                    state.fail_stage("print_start", error, outcome_unknown=True)
+                    raise error
+                else:
+                    state.data["status"] = "print_rejected"
+                    state.data["current_stage"] = None
+                    state.save()
+                    state.emit("job_finished", None, {"status": "print_rejected"})
+                runtime.result = {
+                    "job_id": runtime.job_id,
+                    "status": state.data.get("status"),
+                    "source_job_id": state.data.get("source_job_id"),
+                }
+            except WorkflowStopRequested:
+                state.finish("stopped")
+                runtime.result = {"job_id": runtime.job_id, "status": "stopped"}
+            except BaseException as exc:
+                runtime.error = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "stage": state.data.get("current_stage"),
+                }
+            finally:
+                access_code = ""
+                runtime.finished_unix = time.time()
+                with self._lock:
+                    self._reprint_dispatch_in_progress = False
+
+        thread = threading.Thread(
+            target=work,
+            name=f"automatic-reprint-{runtime.job_id}",
+            daemon=True,
+        )
+        runtime.thread = thread
+        with self._lock:
+            self._runtimes[runtime.job_id] = runtime
+        try:
+            thread.start()
+        except BaseException:
+            with self._lock:
+                self._runtimes.pop(runtime.job_id, None)
+                self._reprint_dispatch_in_progress = False
+            raise
+
+    @staticmethod
+    def _production_services(config: AutomationConfig) -> Any:
+        from am_print_automation.workflow import ProductionServices
+
+        return ProductionServices(config)
 
     def _launch(self, runtime: _RuntimeJob, *, resume: bool) -> None:
         def work() -> None:
@@ -409,6 +692,7 @@ class JobManager:
         from am_print_automation.preparation_recovery import can_recover_preparation
         payload: dict[str, Any] = {
             "job_id": job_id,
+            "source_job_id": state.get("source_job_id"),
             "status": status,
             "current_stage": current_stage,
             "request_text": state.get("request_text", ""),
@@ -431,6 +715,13 @@ class JobManager:
             "preparation_recovery_available": not alive and can_recover_preparation(state),
             "pinned": self._is_pinned(job_id),
         }
+        if status == "print_started" or bool(state.get("start_print_requested")):
+            monitor = self._print_monitor_snapshot(state)
+            payload["print_monitor"] = monitor
+            payload["reprint"] = self._reprint_summary(
+                status,
+                self._live_printer_monitor_snapshot() or monitor,
+            )
         if include_events:
             payload["delivery"] = (delivery_summary(state, self.output_root / job_id)
                                    if not alive and status == state.get("status")
@@ -439,6 +730,90 @@ class JobManager:
                 self.output_root / job_id / "workflow_events.jsonl"
             )
         return payload
+
+    @staticmethod
+    def _reprint_summary(status: str, monitor: Mapping[str, Any]) -> dict[str, Any]:
+        visible = status == "print_started"
+        available = visible and monitor.get("restart_ready") is True
+        monitor_status = str(monitor.get("status") or "unavailable")
+        if available:
+            message = "原任务已结束且打印机处于安全空闲状态，可复用步骤 1 文件再次打印。"
+        elif monitor_status == "paused":
+            message = "暂停不等于结束；请先在打印机端结束原任务，再等待设备降温。"
+        elif monitor_status == "printing":
+            message = "当前仍在打印；结束原任务并等待打印机安全空闲后才可再次打印。"
+        elif monitor_status in {"connecting", "waiting"}:
+            message = "正在确认打印机是否已经安全结束，请稍候。"
+        elif monitor_status == "unavailable":
+            message = "暂时无法确认打印机状态，请重新连接后再试。"
+        else:
+            message = "请确认原任务已结束、设备无告警并完成降温。"
+        return {
+            "visible": visible,
+            "available": available,
+            "message": message,
+        }
+
+    def _print_monitor_snapshot(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        waiting = {
+            "status": "waiting",
+            "printer_state": None,
+            "percent": 0.0,
+            "remaining_minutes": None,
+            "observed_unix": None,
+            "has_alert": False,
+            "restart_ready": False,
+            "message": "打印任务生成完成后，将在这里显示实体打印进度。",
+        }
+        if state.get("status") != "print_started":
+            return waiting
+
+        stages = state.get("stages")
+        print_start = stages.get("print_start") if isinstance(stages, Mapping) else None
+        result = print_start.get("result") if isinstance(print_start, Mapping) else None
+        payload = result.get("payload") if isinstance(result, Mapping) else None
+        print_payload = payload.get("print") if isinstance(payload, Mapping) else None
+        expected_name = (
+            str(print_payload.get("subtask_name"))
+            if isinstance(print_payload, Mapping) and print_payload.get("subtask_name")
+            else None
+        )
+
+        live = self._live_printer_monitor_snapshot()
+        if live is not None:
+            identity = live.get("job_identity")
+            observed_name = (
+                str(identity.get("subtask_name"))
+                if isinstance(identity, Mapping) and identity.get("subtask_name")
+                else None
+            )
+            if expected_name and observed_name and expected_name != observed_name:
+                return {
+                    **waiting,
+                    "status": "unavailable",
+                    "percent": None,
+                    "message": "当前打印机状态属于另一项任务，未混入本任务进度。",
+                }
+            return copy.deepcopy(dict(live))
+
+        events = result.get("events_tail") if isinstance(result, Mapping) else None
+        if isinstance(events, list):
+            for event in reversed(events):
+                if isinstance(event, Mapping):
+                    return summarize_print_status(event, active_seen=True)
+        return waiting
+
+    def _live_printer_monitor_snapshot(self) -> dict[str, Any] | None:
+        if self._printer_connection_provider is None:
+            return None
+        try:
+            connection = self._printer_connection_provider()
+            candidate = connection.get("monitor")
+        except Exception:
+            return None
+        if not isinstance(candidate, Mapping):
+            return None
+        return copy.deepcopy(dict(candidate))
 
     def download(self, job_id: str, kind: str) -> tuple[Path, str, str]:
         with self._lock:
@@ -565,10 +940,19 @@ class PrinterConnectionManager:
         self,
         *,
         connector: Callable[..., PrinterConnectionStatus] = connect_printer,
+        live_monitor_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._connector = connector
+        self._live_monitor_factory = (
+            live_monitor_factory
+            if live_monitor_factory is not None
+            else X1CLiveMonitor
+            if connector is connect_printer
+            else None
+        )
         self._lock = threading.RLock()
         self._access_code = ""
+        self._live_monitor: Any = None
         self._status: dict[str, Any] = {
             "connected": False,
             "printer_ip": None,
@@ -580,6 +964,14 @@ class PrinterConnectionManager:
             "error": None,
             "credential_available": False,
             "verified_unix": None,
+            "monitor": {
+                "status": "unavailable",
+                "printer_state": None,
+                "percent": None,
+                "remaining_minutes": None,
+                "observed_unix": None,
+                "has_alert": False,
+            },
         }
 
     def access_code(self) -> str:
@@ -614,6 +1006,7 @@ class PrinterConnectionManager:
             failure["error"] = str(exc)
             failure["credential_available"] = False
             failure["verified_unix"] = time.time()
+            self._stop_live_monitor()
             with self._lock:
                 self._access_code = ""
                 self._status = failure
@@ -624,12 +1017,78 @@ class PrinterConnectionManager:
             result["error"] = None
             result["credential_available"] = True
             result["verified_unix"] = time.time()
+            initial = result.get("status_summary")
+            result["monitor"] = summarize_print_status(
+                initial if isinstance(initial, Mapping) else {},
+                observed_unix=result["verified_unix"],
+            )
             with self._lock:
                 self._access_code = secret
                 self._status = result
+            self._start_live_monitor(
+                ip=str(result.get("printer_ip") or ip),
+                device_id=str(result.get("device_id") or device_id or ""),
+                access_code=secret,
+            )
             return copy.deepcopy(result)
         finally:
             secret = ""
+
+    def _start_live_monitor(
+        self,
+        *,
+        ip: str,
+        device_id: str,
+        access_code: str,
+    ) -> None:
+        factory = self._live_monitor_factory
+        if factory is None or not ip or not device_id or not access_code:
+            return
+        self._stop_live_monitor()
+        try:
+            monitor = factory(
+                ip=ip,
+                device_id=device_id,
+                access_code=access_code,
+                on_update=self._update_live_status,
+            )
+            with self._lock:
+                self._live_monitor = monitor
+            monitor.start()
+        except Exception as exc:
+            with self._lock:
+                self._live_monitor = None
+            self._update_live_status(
+                {
+                    "status": "unavailable",
+                    "printer_state": None,
+                    "percent": None,
+                    "remaining_minutes": None,
+                    "observed_unix": time.time(),
+                    "has_alert": False,
+                    "message": f"实时监控未启动：{exc}",
+                }
+            )
+
+    def _stop_live_monitor(self) -> None:
+        with self._lock:
+            monitor = self._live_monitor
+            self._live_monitor = None
+        if monitor is not None:
+            monitor.stop()
+
+    def _update_live_status(self, monitor: Mapping[str, Any]) -> None:
+        safe_monitor = copy.deepcopy(dict(monitor))
+        with self._lock:
+            self._status["monitor"] = safe_monitor
+            self._status["live_status_observed_unix"] = safe_monitor.get(
+                "observed_unix"
+            )
+
+    def close(self) -> None:
+        self._stop_live_monitor()
+        with self._lock:
+            self._access_code = ""
 
 
 def _printer_error_http_status(code: str) -> int:
@@ -656,6 +1115,10 @@ class ApplicationServer(ThreadingHTTPServer):
         self.transcriber = transcriber
         self.printer_manager = printer_manager
         super().__init__(server_address, ApplicationHandler)
+
+    def server_close(self) -> None:
+        self.printer_manager.close()
+        super().server_close()
 
 
 class ApplicationHandler(BaseHTTPRequestHandler):
@@ -798,6 +1261,8 @@ class ApplicationHandler(BaseHTTPRequestHandler):
                 result = self.server.manager.set_pinned(job_id, True)
             elif action == "unpin":
                 result = self.server.manager.set_pinned(job_id, False)
+            elif action == "reprint":
+                result = self.server.manager.reprint_job(job_id)
             else:
                 start_print = body.get("start_print")
                 result = self.server.manager.retry_job(

@@ -153,10 +153,17 @@ class AutomationConfig:
     # Kept for resume/config compatibility; native tree support never edits geometry.
     allow_structural_geometry_changes: bool = False
     support_mode: str = "detachable"
+    build_plate: str = "Textured PEI Plate"
 
     def __post_init__(self) -> None:
         from am_print_executor.detachable_support import validate_support_mode
         validate_support_mode(self.support_mode)
+        from am_print_executor.bambu_project_repair import TEXTURED_PEI_PLATE
+        if self.build_plate != TEXTURED_PEI_PLATE:
+            raise ValueError(
+                "The verified automatic workflow currently requires "
+                f"{TEXTURED_PEI_PLATE!r}."
+            )
         if self.provider_poll_interval_seconds <= 0:
             raise ValueError(
                 "provider_poll_interval_seconds must be positive"
@@ -749,6 +756,7 @@ class ProductionServices:
             filament_jsons=self.config.filament_profiles or None,
             allow_structural_changes=self.config.allow_structural_geometry_changes,
             support_mode=self.config.support_mode,
+            build_plate=self.config.build_plate,
         )
 
     def upload_gcode(

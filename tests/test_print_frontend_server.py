@@ -189,7 +189,25 @@ class TestPrintFrontendServer(unittest.TestCase):
         self.assertIn("造物台", page)
         self.assertIn("/app.js", page)
         self.assertIn('id="printerSuccessDialog"', page)
+        self.assertIn('id="printConfirmDialog"', page)
+        self.assertIn('class="print-dispatch-button hidden"', page)
+        self.assertIn('id="retryMicrophone"', page)
+        self.assertIn('id="microphoneSelect"', page)
+        self.assertIn('id="voiceFileInput"', page)
+        self.assertIn('aria-label="生成打印任务"', page)
+        self.assertIn('id="printProgressCard"', page)
+        self.assertIn('id="printMonitorAlertLayer"', page)
+        self.assertIn("正常层不逐条展示", page)
         self.assertIn('type="password"', page)
+
+        with urlopen(self.base + "/app.js", timeout=2.0) as response:
+            application_script = response.read().decode("utf-8")
+        self.assertNotIn("confirm(", application_script)
+        self.assertIn("requestPrintConfirmation", application_script)
+        self.assertIn("enumerateDevices", application_script)
+        self.assertIn("renderPrintMonitor", application_script)
+        self.assertNotIn("文字已放入输入框，当前尚未发送", application_script)
+        self.assertIn("语音已转成文字。", application_script)
 
         request = Request(
             self.base + "/api/jobs",

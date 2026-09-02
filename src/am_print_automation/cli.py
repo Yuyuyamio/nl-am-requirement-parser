@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--machine", type=Path)
     parser.add_argument("--process", type=Path)
     parser.add_argument("--filament", action="append", default=[], type=Path)
+    parser.add_argument("--build-plate", default="Textured PEI Plate")
     parser.add_argument("--start-print", action="store_true")
     parser.add_argument("--access-code-env", default="BAMBU_LAN_ACCESS_CODE")
     parser.add_argument("--device-evidence-request-id", default="M2-1E4B2301FADD")
@@ -78,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         remote_name=args.remote_name,
         allow_structural_geometry_changes=False,
         support_mode="detachable",
+        build_plate=args.build_plate,
     )
 
     def events(event: dict[str, object]) -> None:
