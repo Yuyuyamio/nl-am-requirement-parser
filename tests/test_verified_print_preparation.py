@@ -112,6 +112,7 @@ class BambuNativeTreePreparationTests(unittest.TestCase):
         self.assertFalse(result["post_slice_validation_performed"])
         self.assertFalse(orient.call_args.kwargs["require_flat_source"])
         self.assertFalse(orient.call_args.kwargs["preserve_source_upright"])
+        self.assertTrue(orient.call_args.kwargs["trust_bambu_result"])
         preparation = json.loads(
             (Path(result["preparation_directory"]) / "preparation.json").read_text()
         )

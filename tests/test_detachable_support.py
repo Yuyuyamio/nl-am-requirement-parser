@@ -24,9 +24,16 @@ class BambuTreeSupportProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown_support_mode"):
             validate_support_mode("permanent")
 
-    def test_invalid_nozzle_is_rejected_before_invoking_bambu(self):
-        with self.assertRaisesRegex(ValueError, "invalid_nozzle_diameter"):
-            detachable_process({"layer_height": "0.2"}, 0.0)
+    def test_unrelated_bambu_profile_settings_are_preserved(self):
+        original = {
+            "layer_height": "0.16",
+            "support_top_z_distance": "0.31",
+            "support_threshold_angle": "47",
+        }
+        settings, action = detachable_process(original, 0.0)
+        for key, value in original.items():
+            self.assertEqual(settings[key], value)
+        self.assertTrue(action["bambu_profile_settings_preserved"])
 
 
 if __name__ == "__main__":

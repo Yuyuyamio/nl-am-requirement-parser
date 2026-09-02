@@ -1,4 +1,4 @@
-> 中文使用入口：[造物台使用说明](ZAOWUTAI_QUICK_START.md)。网页默认只生成文件，实体打印必须主动确认。软件通过不代表已实物试打或验证拆卸力度。
+> 中文使用入口：[造物台使用说明](ZAOWUTAI_QUICK_START.md)。网页默认只生成文件；开启自动打印后，Bambu Studio 切片成功即上传开打。
 
 # Automatic print workflow
 
@@ -18,8 +18,8 @@ result = run_text_to_print(
 )
 ```
 
-The access-code provider is called only after the model and final G-code have
-passed all offline gates. Its value is never written to the workflow state or
+The access-code provider is called only after Bambu Studio successfully creates
+the requested G-code 3MF. Its value is never written to the workflow state or
 event log. A speech module only needs to produce a `str`; its audio capture and
 transcription implementation can be replaced without changing the manufacturing
 pipeline. The local frontend provides local faster-whisper transcription
@@ -32,12 +32,11 @@ and always keeps editable text input available.
    exports the STL handoff.
 3. Materialize the selected Bambu profiles, force native `tree(auto)` /
    `tree_hybrid` support, and run Bambu Auto Orient through the hidden CLI.
-4. Slice once with native tree support and inspect the final geometry, bed
-   contact, toolpath and support separation. The workflow does not add its own
-   ramps, fills, ribs or permanent pillars, and a rejected slice does not trigger
-   model regeneration; it stops without uploading or printing.
-5. Expose only receipt-bound final 3MF, G-code 3MF and STL files. The browser
-   preview reads the final STL. Failed, changed or unverified files are blocked.
+4. Slice once with native tree support. A successful Bambu CLI result and its
+   requested output file are the complete printability decision; there is no
+   post-slice geometry, bed-contact, toolpath, support-contact or removal gate.
+5. Expose the Bambu project, G-code 3MF and STL files. Download-time path and
+   hash checks protect file identity only and never decide printability.
 6. Only with explicit `start_print=True`, M4 verifies FTPS upload, reads a fresh
    strict-IDLE printer state and publishes one MQTT `project_file` start command.
 

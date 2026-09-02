@@ -40,9 +40,7 @@ class TestFinalDelivery(unittest.TestCase):
                     "geometry_path": stl, "geometry_sha256": shash}
         self.state = {"status": "ready_to_print", "job_id": self.job.name, "stages": {
             "bambu_slice": {"status": "completed", "result": prepared},
-            "m3_printability": {"status": "skipped", "result": {
-                "reason": "bambu_slice_success_trusted_without_post_slice_validation"}},
-            "bambu_support_reslice": {"status": "skipped"}}}
+        }}
         self.prepared = prepared
         self.save()
         self.server = create_server(port=0, manager=JobManager(output_root=self.root))

@@ -265,14 +265,17 @@ def auto_orient_with_bambu_cli(
     extra_options: Sequence[str] = (),
     require_flat_source: bool = True,
     preserve_source_upright: bool = True,
+    trust_bambu_result: bool = False,
     max_attempts: int = 3,
     timeout: float = 600,
 ) -> dict[str, Any]:
-    """Run Bambu Auto Orient as an isolated, validated headless stage.
+    """Run Bambu Auto Orient as an isolated headless stage.
 
     Exactly one of ``source_model`` and ``assemble_list`` is required.  Each
     attempt writes to a fresh private path; the requested project is replaced
-    atomically only after the artifact passes structural validation.
+    atomically after Bambu reports success. Legacy callers may retain local
+    structural checks; production sets ``trust_bambu_result=True`` and skips
+    every post-orientation inspection.
     """
 
     studio_exe = Path(
@@ -439,24 +442,39 @@ def auto_orient_with_bambu_cli(
                         "Auto Orient artifact."
                     )
                 else:
-                    repair_result = repair_bambu_model_settings_xml(
-                        candidate
-                    )
-                    inspection = (
-                        inspect_auto_oriented_project(
+                    if trust_bambu_result:
+                        # Bambu 2.7 may emit unescaped XML that its next CLI
+                        # invocation cannot reopen. Normalising that one XML
+                        # member is transport compatibility, not a geometry,
+                        # support, or printability decision.
+                        repair_result = repair_bambu_model_settings_xml(
                             candidate
                         )
-                    )
-                    if (
-                        source_model is not None
-                        and preserve_source_upright
-                        and input_path.suffix.lower() == ".stl"
-                    ):
-                        from am_print_executor.semantic_pose_gate import inspect_upright_source_preserved
-                        pose = inspect_upright_source_preserved(input_path, candidate)
-                        if pose["status"] != "pass":
-                            raise BambuAutoOrientError("Auto Orient changed the required upright pose: " + repr(pose), geometry_rejected=True)
-                        inspection["upright_pose"] = pose
+                        inspection = {
+                            "path": str(candidate),
+                            "trusted_bambu_output": True,
+                            "post_orientation_validation_performed": False,
+                            "xml_transport_repair": repair_result,
+                        }
+                    else:
+                        repair_result = repair_bambu_model_settings_xml(
+                            candidate
+                        )
+                        inspection = (
+                            inspect_auto_oriented_project(
+                                candidate
+                            )
+                        )
+                        if (
+                            source_model is not None
+                            and preserve_source_upright
+                            and input_path.suffix.lower() == ".stl"
+                        ):
+                            from am_print_executor.semantic_pose_gate import inspect_upright_source_preserved
+                            pose = inspect_upright_source_preserved(input_path, candidate)
+                            if pose["status"] != "pass":
+                                raise BambuAutoOrientError("Auto Orient changed the required upright pose: " + repr(pose), geometry_rejected=True)
+                            inspection["upright_pose"] = pose
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 geometry_rejections += int(isinstance(exc, BambuAutoOrientError) and exc.geometry_rejected)
@@ -481,17 +499,20 @@ def auto_orient_with_bambu_cli(
             ):
                 os.replace(candidate, output_path)
                 successful_result = result
-                checked_pose = inspection.get("upright_pose")
-                inspection = (
-                    inspect_auto_oriented_project(
-                        output_path
+                if trust_bambu_result:
+                    inspection["path"] = str(output_path)
+                else:
+                    checked_pose = inspection.get("upright_pose")
+                    inspection = (
+                        inspect_auto_oriented_project(
+                            output_path
+                        )
                     )
-                )
-                inspection["xml_repair"] = (
-                    repair_result
-                )
-                if checked_pose is not None:
-                    inspection["upright_pose"] = checked_pose
+                    inspection["xml_repair"] = (
+                        repair_result
+                    )
+                    if checked_pose is not None:
+                        inspection["upright_pose"] = checked_pose
                 break
 
             if attempt < max_attempts:
@@ -518,6 +539,8 @@ def auto_orient_with_bambu_cli(
             3,
         ),
         "headless": True,
+        "trusted_bambu_output": bool(trust_bambu_result),
+        "post_orientation_validation_performed": not trust_bambu_result,
         "source_kind": (
             "model"
             if source_model is not None

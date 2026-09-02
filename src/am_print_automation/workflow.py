@@ -1143,19 +1143,6 @@ def run_text_to_print(
         if isinstance(artifact, Mapping) and artifact.get("path")
         else gcode_path
     )
-    state.skip_stage(
-        "m3_printability",
-        "bambu_slice_success_trusted_without_post_slice_validation",
-    )
-    state.skip_stage(
-        "bambu_support_reslice",
-        "bambu_native_tree_support_already_used",
-    )
-    state.skip_stage(
-        "m3_support_printability",
-        "bambu_slice_success_trusted_without_post_slice_validation",
-    )
-
     if not active_config.start_print:
         state.skip_stage("printer_upload", "prepare_only")
         state.skip_stage("print_start", "prepare_only")

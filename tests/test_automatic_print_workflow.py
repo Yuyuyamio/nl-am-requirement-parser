@@ -282,6 +282,36 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
                 modified['stages'][name]={'status':status,'attempts':1}
                 self.assertFalse(can_recover_preparation(modified))
 
+    def test_old_blocked_preparation_can_reslice_and_print_without_validation(self) -> None:
+        prepared = run_text_to_print(
+            "打印一个树状支撑测试件",
+            config=self.config(),
+            services=FakeServices(self.root),
+        )
+        state_file = Path(prepared.state_file)
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["status"] = "printability_blocked"
+        state["preparation_revision"] = "20260901_bambu_native_tree_support_v1"
+        state["stages"]["bambu_slice"]["result"].update(
+            status="blocked",
+            pipeline="bambu_native_tree_support_v1",
+        )
+        _atomic_write_json(state_file, state)
+
+        services = FakeServices(self.root)
+        result = run_text_to_print(
+            "打印一个树状支撑测试件",
+            config=self.config(start_print=True),
+            resume_job_id=prepared.job_id,
+            services=services,
+            access_code_provider=lambda: "TOP-SECRET",
+        )
+
+        self.assertEqual(result.status, "print_started")
+        self.assertEqual(services.calls, ["bambu_slice", "printer_upload", "print_start"])
+        current = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertNotIn("m3_printability", current["stages"])
+
     def test_direct_print_consumes_secret_once_and_never_persists_it(self) -> None:
         services = FakeServices(self.root)
         secret_calls = 0
@@ -409,16 +439,9 @@ class TestAutomaticPrintWorkflow(unittest.TestCase):
         state = json.loads(Path(result.state_file).read_text(encoding="utf-8"))
         self.assertNotIn("geometry_regeneration_attempts", state)
         self.assertNotIn("printability_resolution", state)
-        self.assertEqual(state["stages"]["m3_printability"]["status"], "skipped")
-        self.assertEqual(
-            state["stages"]["m3_printability"]["result"]["reason"],
-            "bambu_slice_success_trusted_without_post_slice_validation",
-        )
-        self.assertEqual(
-            state["stages"]["bambu_support_reslice"]["status"],
-            "skipped",
-        )
-
+        self.assertNotIn("m3_printability", state["stages"])
+        self.assertNotIn("bambu_support_reslice", state["stages"])
+        self.assertNotIn("m3_support_printability", state["stages"])
     def test_print_dispatch_with_unknown_outcome_is_never_replayed(self) -> None:
         services = FakeServices(self.root, interrupt_start=True)
         with self.assertRaises(AutomationWorkflowError) as context:

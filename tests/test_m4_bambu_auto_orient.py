@@ -243,6 +243,40 @@ class BambuAutoOrientTests(unittest.TestCase):
 
             self.assertEqual(output.read_bytes(), b"stale")
 
+    def test_trusted_bambu_result_skips_geometry_and_xml_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            studio, source, machine, process, filament = self._inputs(root)
+            output = root / "oriented.project.3mf"
+
+            def fake_run(command, **kwargs):
+                candidate = Path(command[command.index("--export-3mf") + 1])
+                candidate.write_bytes(b"bambu-owned-output")
+                return _result(command)
+
+            with mock.patch.object(orient, "run_bambu_cli", side_effect=fake_run), mock.patch.object(
+                orient, "inspect_auto_oriented_project"
+            ) as inspect, mock.patch.object(
+                orient, "repair_bambu_model_settings_xml"
+            ) as repair:
+                result = orient.auto_orient_with_bambu_cli(
+                    studio_exe=studio,
+                    source_model=source,
+                    output_path=output,
+                    machine_json=machine,
+                    process_json=process,
+                    filament_jsons=[filament],
+                    require_flat_source=False,
+                    preserve_source_upright=False,
+                    trust_bambu_result=True,
+                )
+
+            self.assertEqual(output.read_bytes(), b"bambu-owned-output")
+            self.assertTrue(result["trusted_bambu_output"])
+            self.assertFalse(result["post_orientation_validation_performed"])
+            inspect.assert_not_called()
+            repair.assert_called_once()
+
     def test_curved_base_is_blocked_before_bambu_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

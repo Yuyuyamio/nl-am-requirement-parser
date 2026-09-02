@@ -127,6 +127,18 @@ class OpenRouterProvider:
         except ValueError:
             max_retries = 2
 
+        try:
+            content_retries = int(
+                os.getenv("OPENROUTER_CONTENT_RETRIES", "2")
+            )
+        except ValueError:
+            content_retries = 2
+
+        # The SDK only retries transport/API failures.  OpenRouter's free
+        # router can occasionally return a successful HTTP response whose
+        # selected model produced no final answer, so retry that case here.
+        self.content_retries = max(0, min(content_retries, 5))
+
         self.client = OpenAI(
             base_url=(
                 "https://openrouter.ai/api/v1"
@@ -151,72 +163,113 @@ class OpenRouterProvider:
         schema_name: str,
         schema: dict[str, Any],
     ) -> dict[str, Any]:
-        try:
-            response = (
-                self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": instructions,
-                        },
-                        {
-                            "role": "user",
-                            "content": user_input,
-                        },
-                    ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": schema_name,
-                            "strict": True,
-                            "schema": schema,
-                        },
-                    },
-                    temperature=0,
-                    stream=False,
-                    extra_body={
-                        "provider": {
-                            "require_parameters": True,
-                        },
-                        "plugins": [
+        last_problem = "OpenRouter没有返回可解析内容。"
+        last_model: str | None = None
+        last_finish_reason: str | None = None
+
+        for attempt in range(self.content_retries + 1):
+            try:
+                response = (
+                    self.client.chat.completions.create(
+                        model=self.model,
+                        messages=[
                             {
-                                "id": (
-                                    "response-healing"
-                                )
-                            }
+                                "role": "system",
+                                "content": instructions,
+                            },
+                            {
+                                "role": "user",
+                                "content": user_input,
+                            },
                         ],
-                    },
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": schema_name,
+                                "strict": True,
+                                "schema": schema,
+                            },
+                        },
+                        temperature=0,
+                        stream=False,
+                        extra_body={
+                            "provider": {
+                                "require_parameters": True,
+                            },
+                            "plugins": [
+                                {
+                                    "id": (
+                                        "response-healing"
+                                    )
+                                }
+                            ],
+                        },
+                    )
                 )
-            )
 
-        except OpenAIError as error:
-            raise RuntimeError(
-                "OpenRouter API调用失败："
-                f"{error}"
-            ) from error
+            except OpenAIError as error:
+                raise RuntimeError(
+                    "OpenRouter API调用失败："
+                    f"{error}"
+                ) from error
 
-        self.last_model = response.model
+            last_model = getattr(response, "model", None)
+            self.last_model = last_model
+            choices = getattr(response, "choices", None) or []
 
-        if not response.choices:
-            raise RuntimeError(
-                "OpenRouter没有返回任何候选结果。"
-            )
+            if not choices:
+                last_problem = "OpenRouter没有返回任何候选结果。"
+                last_finish_reason = None
+                continue
 
-        message = response.choices[0].message
-        output_text = message.content
+            output_text: str | None = None
+            unsupported_content = False
 
-        if output_text is None:
-            raise RuntimeError(
-                "OpenRouter没有返回文本内容。"
-            )
+            for choice in choices:
+                message = getattr(choice, "message", None)
+                content = getattr(message, "content", None)
 
-        if not isinstance(output_text, str):
-            raise RuntimeError(
-                "OpenRouter返回了非字符串内容，"
-                "当前程序无法解析。"
-            )
+                if isinstance(content, str):
+                    if content.strip():
+                        output_text = content
+                        last_finish_reason = str(
+                            getattr(choice, "finish_reason", "") or ""
+                        ) or None
+                        break
+                elif content is not None:
+                    unsupported_content = True
 
-        return _extract_json_object(
-            output_text
+                last_finish_reason = str(
+                    getattr(choice, "finish_reason", "") or ""
+                ) or None
+
+            if output_text is not None:
+                try:
+                    return _extract_json_object(output_text)
+                except RuntimeError as error:
+                    last_problem = str(error)
+                    continue
+
+            if unsupported_content:
+                last_problem = (
+                    "OpenRouter返回了非字符串内容，"
+                    "当前程序无法解析。"
+                )
+            else:
+                last_problem = "OpenRouter没有返回文本内容。"
+
+        diagnostic_parts = []
+        if last_model:
+            diagnostic_parts.append(f"实际模型：{last_model}")
+        if last_finish_reason:
+            diagnostic_parts.append(f"结束原因：{last_finish_reason}")
+        diagnostic = (
+            "（" + "；".join(diagnostic_parts) + "）"
+            if diagnostic_parts
+            else ""
+        )
+        attempts = self.content_retries + 1
+        raise RuntimeError(
+            f"{last_problem}{diagnostic}"
+            f"已自动尝试{attempts}次。"
         )

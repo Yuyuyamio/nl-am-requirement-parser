@@ -195,11 +195,8 @@ def prepare_verified_print(
         filament_jsons=list(filament_jsons or [discovered["filament"]]),
         cache_dir=directory / "profiles",
     )
-    machine = json.loads(Path(resolved["machine"]).read_text(encoding="utf-8"))
-    nozzle_value = machine.get("nozzle_diameter", [0.4])
-    nozzle = float(nozzle_value[0] if isinstance(nozzle_value, list) else nozzle_value)
     process = json.loads(Path(resolved["process"]).read_text(encoding="utf-8"))
-    process, support_action = detachable_process(process, nozzle)
+    process, support_action = detachable_process(process)
     process_file = directory / "bambu_tree_support_process.json"
     save_report(process_file, process)
 
@@ -218,6 +215,7 @@ def prepare_verified_print(
             output_path=project,
             require_flat_source=False,
             preserve_source_upright=False,
+            trust_bambu_result=True,
             **profiles,
         )
     except BambuAutoOrientError as exc:
@@ -261,6 +259,9 @@ def prepare_verified_print(
             "support_type": NATIVE_SUPPORT_TYPE,
             "support_style": NATIVE_SUPPORT_STYLE,
             "headless": True,
+            "bambu_decision_owner": True,
+            "post_orientation_validation_performed": False,
+            "post_slice_validation_performed": False,
             "structural_geometry_changes_requested": bool(allow_structural_changes),
             "structural_geometry_changes_applied": False,
             "critical_regions_recorded": list(critical_regions),

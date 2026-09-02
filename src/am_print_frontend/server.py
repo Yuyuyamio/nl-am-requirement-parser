@@ -254,7 +254,7 @@ class JobManager:
             try:
                 verified_files(state, self.output_root / job_id)
             except (DeliveryUnavailable, OSError, TypeError, AttributeError) as exc:
-                raise ApiError(HTTPStatus.CONFLICT, "当前任务缺少有效的最终验收文件，不能启动打印。") from exc
+                raise ApiError(HTTPStatus.CONFLICT, "当前任务缺少有效的 Bambu 切片文件，不能启动打印。") from exc
         runtime = _RuntimeJob(
             job_id=job_id,
             transcript=str(state.get("request_text", "")),
