@@ -766,67 +766,29 @@ class ProductionServices:
         *,
         printer_connection: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        sender = os.environ.get(
-            "NL_AM_PRINT_SENDER",
-            "bambu_native_headless",
-        ).strip().lower()
+        from am_print_executor.developer_mode_backend_v1120 import upload_print_artifact
 
-        if sender == "legacy_direct":
-            from am_print_executor.developer_mode_backend_v1120 import upload_print_artifact
-
-            return upload_print_artifact(
-                gcode_path,
-                access_code,
-                remote_name=self.config.remote_name,
-                device_evidence_request_id=self.config.device_evidence_request_id,
-                expected_device_id=self.config.expected_device_id,
-                printer_connection=printer_connection,
-            )
-
-        if sender != "bambu_native_headless":
-            raise AutomationWorkflowError(
-                "Unsupported NL_AM_PRINT_SENDER value: " + sender
-            )
-
-        from am_print_executor.bambu_headless_native_sender import prepare_native_handoff
-
-        # Deliberately no FTPS upload here. The stock Bambu networking
-        # module owns upload + print dispatch as one native operation.
-        return prepare_native_handoff(
+        return upload_print_artifact(
             gcode_path,
+            access_code,
+            remote_name=self.config.remote_name,
+            device_evidence_request_id=self.config.device_evidence_request_id,
+            expected_device_id=self.config.expected_device_id,
             printer_connection=printer_connection,
         )
 
     def start_print(self, upload: dict[str, Any], access_code: str) -> dict[str, Any]:
-        sender = os.environ.get(
-            "NL_AM_PRINT_SENDER",
-            "bambu_native_headless",
-        ).strip().lower()
+        from am_print_executor.developer_mode_backend_v1120 import start_uploaded_print
 
-        if sender == "legacy_direct":
-            from am_print_executor.developer_mode_backend_v1120 import start_uploaded_print
-
-            return start_uploaded_print(
-                access_code,
-                upload,
-                use_ams=self.config.use_ams,
-                ams_mapping=(
-                    list(self.config.ams_mapping)
-                    if self.config.ams_mapping is not None
-                    else None
-                ),
-            )
-
-        if sender != "bambu_native_headless":
-            raise AutomationWorkflowError(
-                "Unsupported NL_AM_PRINT_SENDER value: " + sender
-            )
-
-        from am_print_executor.bambu_headless_native_sender import start_native_headless_print
-
-        return start_native_headless_print(
+        return start_uploaded_print(
             access_code,
             upload,
+            use_ams=self.config.use_ams,
+            ams_mapping=(
+                list(self.config.ams_mapping)
+                if self.config.ams_mapping is not None
+                else None
+            ),
         )
 
 
