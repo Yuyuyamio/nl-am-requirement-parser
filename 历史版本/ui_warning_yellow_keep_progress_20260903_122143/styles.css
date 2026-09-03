@@ -10,7 +10,6 @@
   --accent: #65d6ba;
   --accent-strong: #3fc4a4;
   --danger: #ff716c;
-  --warning: #d0a650;
   font-family: Inter, "SF Pro Display", "Segoe UI", "PingFang SC", sans-serif;
 }
 
@@ -80,7 +79,6 @@ button { color: inherit; }
 .history-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 9px var(--accent); }
 .history-dot.complete { background: #646b74; box-shadow: none; }
 .history-dot.error { background: var(--danger); box-shadow: 0 0 9px rgba(255,113,108,.45); }
-.history-dot.warning { background: var(--warning); box-shadow: 0 0 9px rgba(208,166,80,.42); }
 .history-dot.paused { background: #d0a650; box-shadow: 0 0 9px rgba(208,166,80,.35); }
 .history-copy { display: grid; min-width: 0; }
 .history-copy strong { overflow: hidden; font-size: 13px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
@@ -188,7 +186,6 @@ h1 { margin: 5px 0 0; font-size: 15px; font-weight: 600; }
 .event-item time { color: #4f5660; font-variant-numeric: tabular-nums; }
 .print-progress-card { padding-bottom: 16px; border-color: rgba(101,214,186,.14); background: linear-gradient(145deg, rgba(101,214,186,.035), rgba(23,26,32,.78)); }
 .print-progress-card[data-status="completed"] { border-color: rgba(101,214,186,.28); }
-.print-progress-card[data-status="warning"] { border-color: rgba(208,166,80,.38); background: linear-gradient(145deg, rgba(208,166,80,.08), rgba(23,26,32,.82)); }
 .print-progress-card[data-status="error"] { border-color: rgba(255,113,108,.34); background: linear-gradient(145deg, rgba(255,113,108,.07), rgba(23,26,32,.82)); }
 .print-progress-track { height: 5px; margin-bottom: 15px; }
 .print-monitor-summary { display: grid; grid-template-columns: 10px auto 1fr; align-items: center; gap: 8px; min-height: 28px; }
@@ -197,7 +194,6 @@ h1 { margin: 5px 0 0; font-size: 15px; font-weight: 600; }
 .print-state-dot { width: 8px; height: 8px; border-radius: 50%; background: #59616c; box-shadow: 0 0 0 4px rgba(89,97,108,.08); }
 .print-state-dot.printing, .print-state-dot.connecting { background: var(--accent); box-shadow: 0 0 0 4px rgba(101,214,186,.08), 0 0 12px rgba(101,214,186,.35); animation: pulse 1.8s infinite; }
 .print-state-dot.paused { background: #d0a650; box-shadow: 0 0 0 4px rgba(208,166,80,.1); }
-.print-state-dot.warning { background: var(--warning); box-shadow: 0 0 0 4px rgba(208,166,80,.12), 0 0 12px rgba(208,166,80,.28); }
 .print-state-dot.completed { background: var(--accent); box-shadow: 0 0 0 4px rgba(101,214,186,.09); }
 .print-state-dot.error, .print-state-dot.unavailable { background: var(--danger); box-shadow: 0 0 0 4px rgba(255,113,108,.09); }
 .layer-monitor-note { margin: 11px 0 0 18px; color: #59626d; font-size: 9px; line-height: 1.55; }
@@ -205,10 +201,6 @@ h1 { margin: 5px 0 0; font-size: 15px; font-weight: 600; }
 .print-monitor-alert strong { color: #ffb2ae; font-size: 10px; }
 .print-monitor-alert p { margin: 6px 0 4px; color: #d99692; font-size: 10px; line-height: 1.55; }
 .print-monitor-alert small { color: #ad7774; font-size: 9px; }
-.print-monitor-alert.warning { border-color: rgba(208,166,80,.34); background: rgba(208,166,80,.09); }
-.print-monitor-alert.warning strong { color: #f2d28a; }
-.print-monitor-alert.warning p { color: #d9bd7a; }
-.print-monitor-alert.warning small { color: #aa9568; }
 .reprint-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px 18px; margin-top: 14px; padding: 14px; border: 1px solid rgba(101,214,186,.15); border-radius: 11px; background: rgba(101,214,186,.045); }
 .reprint-panel-copy { display: grid; min-width: 0; gap: 4px; }
 .reprint-panel-copy span { color: var(--accent); font-size: 8px; font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }

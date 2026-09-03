@@ -120,7 +120,6 @@ let printConfirmationResolve = null;
 let browserRecordingAvailable = false;
 let audioInputDevices = [];
 let pendingDeleteConversation = null;
-const printProgressMemory = new Map();
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -432,7 +431,6 @@ const PRINT_MONITOR_TEXT = {
   printing: ["正在打印", "逐层状态已折叠为总体进度"],
   paused: ["打印已暂停", "请在打印机或官方设备控制中处理"],
   completed: ["打印已完成", "监控已收到正常结束状态"],
-  warning: ["监测到警告", "请核对提示；打印进度继续保留"],
   error: ["打印异常", "请立即检查打印机"],
   unavailable: ["监控暂时不可用", "打印任务可能仍在设备上运行"],
 };
@@ -466,21 +464,12 @@ function renderPrintMonitor(snapshot) {
   const monitor = snapshot.print_monitor || {};
   const status = String(monitor.status || "waiting");
   const labels = PRINT_MONITOR_TEXT[status] || PRINT_MONITOR_TEXT.waiting;
-  const jobProgressKey = String(snapshot.job_id || selectedJobId || "");
-  const hasPercent = monitor.percent !== null && monitor.percent !== undefined && monitor.percent !== "";
-  const numericPercent = hasPercent ? Number(monitor.percent) : Number.NaN;
-  let percent;
-  if (Number.isFinite(numericPercent)) {
-    percent = Math.max(0, Math.min(100, numericPercent));
-    if (jobProgressKey) printProgressMemory.set(jobProgressKey, percent);
-  } else {
-    const remembered = jobProgressKey ? printProgressMemory.get(jobProgressKey) : undefined;
-    percent = Number.isFinite(remembered) ? remembered : 0;
-  }
+  const numericPercent = Number(monitor.percent);
+  const percent = Number.isFinite(numericPercent) ? Math.max(0, Math.min(100, numericPercent)) : 0;
   const percentLabel = Number.isInteger(percent) ? String(percent) : percent.toFixed(1);
   elements.printProgressValue.textContent = `${percentLabel}%`;
   elements.printProgressBar.style.width = `${percent}%`;
-  elements.printProgressBar.classList.toggle("is-running", ["printing", "warning"].includes(status));
+  elements.printProgressBar.classList.toggle("is-running", status === "printing");
   elements.printProgressBar.parentElement.setAttribute("role", "progressbar");
   elements.printProgressBar.parentElement.setAttribute("aria-valuemin", "0");
   elements.printProgressBar.parentElement.setAttribute("aria-valuemax", "100");
@@ -497,13 +486,8 @@ function renderPrintMonitor(snapshot) {
   renderReprint(snapshot);
 
   const alert = monitor.alert;
-  const showAlert = ["error", "warning"].includes(status) || Boolean(monitor.has_alert);
-  const alertSeverity = monitor.alert_severity === "warning" || status === "warning"
-    ? "warning"
-    : "error";
+  const showAlert = status === "error" || Boolean(monitor.has_alert);
   elements.printMonitorAlert.classList.toggle("hidden", !showAlert);
-  elements.printMonitorAlert.classList.toggle("warning", showAlert && alertSeverity === "warning");
-  elements.printMonitorAlert.classList.toggle("error", showAlert && alertSeverity === "error");
   if (!showAlert) {
     elements.printMonitorAlertMessage.textContent = "";
     elements.printMonitorAlertLayer.textContent = "";
@@ -589,7 +573,6 @@ function updateElapsed() {
 }
 
 function historyClass(job) {
-  if (job.print_monitor?.status === "warning") return "warning";
   if (job.print_monitor?.status === "error" || ["failed", "credentials_required", "manual_reconciliation_required", "print_rejected"].includes(job.status)) return "error";
   if (job.print_monitor?.status === "paused" || job.status === "paused" || job.control?.status === "pause_requested") return "paused";
   if (["printing", "connecting", "waiting"].includes(job.print_monitor?.status)) return "";

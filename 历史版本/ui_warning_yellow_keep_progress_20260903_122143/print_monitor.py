@@ -60,9 +60,7 @@ def summarize_print_status(
     hms = print_object.get("hms")
     hms_alerts = copy.deepcopy(hms) if isinstance(hms, list) and hms else []
     print_error = print_object.get("print_error")
-    hard_error = state == "FAILED" or _is_nonzero_error(print_error)
-    has_warning = bool(hms_alerts) and not hard_error
-    has_alert = hard_error or has_warning
+    has_alert = state == "FAILED" or _is_nonzero_error(print_error) or bool(hms_alerts)
 
     nozzle_target = _number(print_object.get("nozzle_target_temper"))
     bed_target = _number(print_object.get("bed_target_temper"))
@@ -80,10 +78,8 @@ def summarize_print_status(
         and bed_target <= 40
     )
 
-    if hard_error:
+    if has_alert:
         status = "error"
-    elif has_warning:
-        status = "warning"
     elif state in PAUSED_STATES:
         status = "paused"
     elif state in ACTIVE_STATES:
@@ -103,9 +99,6 @@ def summarize_print_status(
         "remaining_minutes": remaining,
         "observed_unix": observed_unix if observed_unix is not None else time.time(),
         "has_alert": has_alert,
-        "alert_severity": (
-            "error" if hard_error else "warning" if has_warning else None
-        ),
         "restart_ready": restart_ready,
     }
     identity = {
@@ -117,11 +110,7 @@ def summarize_print_status(
         result["job_identity"] = identity
     if has_alert:
         result["alert"] = {
-            "message": (
-                "打印机报告错误，请立即检查设备。"
-                if hard_error
-                else "AI / HMS 监测到警告，请核对；打印任务本身仍可继续监控。"
-            ),
+            "message": "打印机报告异常，请检查设备后再决定是否继续。",
             "print_error": print_error,
             "hms": hms_alerts,
             "layer_num": int(current_layer) if current_layer is not None else None,
@@ -149,7 +138,6 @@ class X1CLiveMonitor:
         self._thread: threading.Thread | None = None
         self._client: Any = None
         self._active_seen = False
-        self._last_percent: float | None = None
 
     def start(self) -> None:
         if self._thread is not None:
@@ -177,19 +165,13 @@ class X1CLiveMonitor:
         state = str(print_object.get("gcode_state") or "").strip().upper()
         if state in ACTIVE_STATES or state in PAUSED_STATES:
             self._active_seen = True
-        summary = summarize_print_status(
-            print_object,
-            observed_unix=time.time(),
-            active_seen=self._active_seen,
+        self._on_update(
+            summarize_print_status(
+                print_object,
+                observed_unix=time.time(),
+                active_seen=self._active_seen,
+            )
         )
-        percent = summary.get("percent")
-        if percent is not None:
-            self._last_percent = float(percent)
-        elif self._last_percent is not None and self._active_seen:
-            # Some warning/HMS packets omit mc_percent. Never turn a missing
-            # telemetry field into a fake 0% regression in the UI.
-            summary["percent"] = self._last_percent
-        self._on_update(summary)
 
     def _run(self) -> None:
         import paho.mqtt.client as mqtt
